@@ -1,31 +1,21 @@
+<!-- src/App.vue -->
 <template>
-  <div>
-    <h1>Hello App!</h1>
-    <p><strong>Current route path:</strong> {{ $route.fullPath }}</p>
-    <nav>
-      <RouterLink to="/">Go to Home</RouterLink>
-      <RouterLink to="/about">Go to About</RouterLink>
-    </nav>
-    <main>
-      <RouterView />
-    </main>
+  <div id="app">
+    <!-- RouterView renders whichever view matches the current route (e.g. Dashboard, Users) -->
+    <RouterView />
   </div>
 </template>
 
 <script setup>
+// Root app component acts as the main entry point for Vue Router
 </script>
 
-<style scoped>
-nav {
-  margin-bottom: 20px;
-}
-nav a {
-  margin-right: 15px;
-  text-decoration: none;
-  color: #0073e6;
-}
-nav a.router-link-active {
-  font-weight: bold;
-  text-decoration: underline;
+<style>
+/* Global resets or app-level utility styles can go here */
+body {
+  margin: 0;
+  padding: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background-color: #f8fafc;
 }
 </style>

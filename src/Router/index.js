@@ -1,15 +1,22 @@
+// src/router/index.js
 import { createMemoryHistory, createRouter } from 'vue-router'
-import HomeView from '../components/User/user.vue'
-
-// Basic placeholder for AboutView if not created yet
-const AboutView = { template: '<div><h2>About Page</h2></div>' }
+import UserManagement from '@/components/User/user.vue'
+import Dashboard from '@/views/Dashboard.vue' // Optional: your dashboard view
 
 const routes = [
-  { path: '/', component: HomeView },
-  { path: '/about', component: AboutView },
+  { 
+    path: '/', 
+    name: 'Dashboard', 
+    component: Dashboard 
+  },
+  { 
+    path: '/users', 
+    name: 'Users', 
+    component: UserManagement 
+  },
 ]
 
 export const router = createRouter({
-  history: createMemoryHistory(), // Ideal for Google Apps Script execution context
+  history: createMemoryHistory(),
   routes,
 })

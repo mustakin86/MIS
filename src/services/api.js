@@ -1,10 +1,9 @@
 // src/services/api.js
 
-const DEPLOYED_URL = 'https://script.google.com/macros/s/AKfycbyee-4i1p3Nb1Quasyv8RRR0pS6GjBdR2GATyuUFeGO6pl08Fn5h0GEsBCnJJBisMjA5w/exec';
+const DEPLOYED_URL = 'https://script.google.com/macros/s/AKfycbw_kD_P-w1xBzPZ-x2SwrkS0aEZqfi9XXDhqoewuP9_vJ-zBIgpLZRjtrBeVu5RtsFx/exec';
 
 export const dbAPI = {
   async readRecords(sheetName = 'Users') {
-    // 1. Google Apps Script execution context
     if (typeof google !== 'undefined' && google.script && google.script.run) {
       return new Promise((resolve, reject) => {
         google.script.run
@@ -14,7 +13,6 @@ export const dbAPI = {
       });
     }
 
-    // 2. Vite local dev server (GET query to prevent CORS redirect blocks)
     try {
       const response = await fetch(`${DEPLOYED_URL}?sheetName=${encodeURIComponent(sheetName)}`, {
         method: 'GET',
@@ -24,7 +22,7 @@ export const dbAPI = {
       if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
       
       const result = await response.json();
-      if (!result.success) throw new Error(result.error || 'Server returned unsuccessful response');
+      if (result.status !== 'success') throw new Error(result.error || 'Server returned unsuccessful response');
       return result.data;
     } catch (err) {
       console.error('Fetch error:', err);
@@ -33,7 +31,6 @@ export const dbAPI = {
   },
 
   async createRecord(sheetName = 'Users', data = {}) {
-    // 1. Google Apps Script execution context
     if (typeof google !== 'undefined' && google.script && google.script.run) {
       return new Promise((resolve, reject) => {
         google.script.run
@@ -43,7 +40,6 @@ export const dbAPI = {
       });
     }
 
-    // 2. Vite local dev server (POST text/plain)
     try {
       const response = await fetch(DEPLOYED_URL, {
         method: 'POST',
@@ -55,7 +51,7 @@ export const dbAPI = {
       if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
 
       const result = await response.json();
-      if (!result.success) throw new Error(result.error || 'Failed to create record');
+      if (result.status !== 'success') throw new Error(result.error || 'Failed to create record');
       return result.data;
     } catch (err) {
       console.error('Fetch error:', err);
