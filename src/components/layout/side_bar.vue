@@ -46,13 +46,61 @@
                 <li class="nav-item">
                     <a href="#connectCollapse" class="nav-link dropdown-toggle collapsed" data-bs-toggle="collapse" role="button" aria-expanded="false">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="me-2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 1 7.07 7.07l1.71-1.71"/></svg>
-                        Connect
+                        User
                     </a>
                     <div class="collapse ms-3 border-start ps-2 my-1" id="connectCollapse">
                         <ul class="nav nav-pills flex-column gap-1">
-                            <li><a href="#" class="nav-link py-1 fs-7">Accounts</a></li>
-                            <li><a href="#" class="nav-link py-1 fs-7">Transfers</a></li>
-                            <li><a href="#" class="nav-link py-1 fs-7">Collected Fees</a></li>
+                            <li><RouterLink to="user" class="nav-link py-1 fs-7">User list</RouterLink></li>
+                            
+                        </ul>
+                    </div>
+                </li>
+                <li class="nav-item">
+                    <a href="#skillTest" class="nav-link dropdown-toggle collapsed" data-bs-toggle="collapse" role="button" aria-expanded="false">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="me-2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 1 7.07 7.07l1.71-1.71"/></svg>
+                        Skill Management
+                    </a>
+                    <div class="collapse ms-3 border-start ps-2 my-1" id="skillTest">
+                        <ul class="nav nav-pills flex-column gap-1">
+                           <!-- Example for Skill Test -->
+                            <li>
+                            <RouterLink to="/Empolyee_Evaluation" class="nav-link py-1 fs-7">Skill Test</RouterLink>
+                            </li>
+                                                        
+                        </ul>
+                    </div>
+                </li>
+                <li class="nav-item">
+                    <a href="#library" class="nav-link dropdown-toggle collapsed" data-bs-toggle="collapse" role="button" aria-expanded="false">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="me-2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 1 7.07 7.07l1.71-1.71"/></svg>
+                        Library
+                    </a>
+                    <div class="collapse ms-3 border-start ps-2 my-1" id="library">
+                        <ul class="nav nav-pills flex-column gap-1">
+                           <!-- Example for Skill Test -->
+                            <li>
+                            <RouterLink to="/item_list" class="nav-link py-1 fs-7">Item List</RouterLink>
+                            </li>
+                            <li>
+                            <RouterLink to="/machine_list" class="nav-link py-1 fs-7">Machine List</RouterLink>
+                            </li>
+                                                        
+                        </ul>
+                    </div>
+                </li>
+                 <li class="nav-item">
+                    <a href="#smv" class="nav-link dropdown-toggle collapsed" data-bs-toggle="collapse" role="button" aria-expanded="false">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="me-2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 1 7.07 7.07l1.71-1.71"/></svg>
+                        SMV
+                    </a>
+                    <div class="collapse ms-3 border-start ps-2 my-1" id="smv">
+                        <ul class="nav nav-pills flex-column gap-1">
+                           <!-- Example for Skill Test -->
+                            <li>
+                            <RouterLink to="/add_smv" class="nav-link py-1 fs-7">Add SMV</RouterLink>
+                            </li>
+                           
+                                                        
                         </ul>
                     </div>
                 </li>
@@ -65,6 +113,7 @@
                     </a>
                     <div class="collapse ms-3 border-start ps-2 my-1" id="smvCollapse">
                         <ul class="nav nav-pills flex-column gap-1">
+                           
                             <li><a href="#" class="nav-link py-1 fs-7">SMV Breakdowns</a></li>
                             <li><a href="#" class="nav-link py-1 fs-7">Machine Targets</a></li>
                             <li><a href="#" class="nav-link py-1 fs-7">Daily Reports</a></li>
