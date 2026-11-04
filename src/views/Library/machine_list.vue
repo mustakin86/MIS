@@ -208,7 +208,7 @@ const fetchMachines = async () => {
       ...item,
       ID: item.ID || item.id || item._id || '',
       Brand: item['Brand'] || item.Brand || item.brand || '',
-      MachineType: item['Machine Type'] || item['MachineType'] || item.machineType || '',
+      MachineType: item['MachineType'] || item.machineType || '',
       RPM: item['RPM'] || item.RPM || item.rpm || '',
       SPI: item['SPI'] || item.SPI || item.spi || '',
       Bobine: item['Bobine'] || item.Bobine || item.bobine || '',
@@ -243,14 +243,14 @@ const saveMachine = async () => {
   
   try {
     const payload = {
-      'Brand': form.value.brand.trim(),
-      'Machine Type': form.value.machineType.trim(),
-      'RPM': form.value.rpm.trim(),
-      'SPI': form.value.spi.trim(),
-      'Bobine': form.value.bobine.trim(),
-      'Lopper': form.value.lopper.trim(),
-      'Remarks': form.value.remarks.trim()
-    };
+  'Brand': form.value.brand?.trim() || '',
+  'MachineType': form.value.machineType?.trim() || '',
+  'RPM': Number(form.value.rpm) || 0,
+  'SPI': Number(form.value.spi) || 0,
+  'Bobine': Number(form.value.bobine) || 0,
+  'Lopper': Number(form.value.lopper) || 0,
+  'Remarks': form.value.remarks?.trim() || ''
+};
 
     if (isEditing.value) {
       await dbAPI.updateRecord('Machines', editingId.value, payload);

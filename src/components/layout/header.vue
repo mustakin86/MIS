@@ -1,15 +1,28 @@
 <template>
-  <header class="top-header px-3 d-flex align-items-center justify-content-between">
+  <header class="top-header px-3 d-flex align-items-center justify-content-between" :class="{ 'header-expanded': isSidebarCollapsed }">
     <div class="d-flex align-items-center gap-3">
       <!-- Hamburger Toggle Button -->
       <button class="btn btn-light btn-sm border-0 shadow-sm px-2" @click="$emit('toggle-sidebar')" title="Toggle Navigation">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="3" y1="12" x2="21" y2="12"/>
+          <line x1="3" y1="6" x2="21" y2="6"/>
+          <line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
       </button>
       
       <!-- Search Input -->
       <div class="position-relative d-none d-sm-block" style="width: 220px;">
-        <input type="search" :value="searchQuery" @input="$emit('update:searchQuery', $event.target.value)" class="form-control form-control-sm ps-4 bg-light border-0" placeholder="Search system...">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="position-absolute top-50 start-0 translate-middle-y ms-2 text-muted"><circle cx="11" cy="11" r="8"/><line x1="21" x2="16.65" y1="21" y2="16.65"/></svg>
+        <input 
+          type="search" 
+          :value="searchQuery" 
+          @input="$emit('update:searchQuery', $event.target.value)" 
+          class="form-control form-control-sm ps-4 bg-light border-0" 
+          placeholder="Search system..."
+        >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="position-absolute top-50 start-0 translate-middle-y ms-2 text-muted">
+          <circle cx="11" cy="11" r="8"/>
+          <line x1="21" x2="16.65" y1="21" y2="16.65"/>
+        </svg>
       </div>
     </div>
 
@@ -29,7 +42,8 @@
 <script setup>
 defineProps({
   searchQuery: String,
-  isSyncing: Boolean
+  isSyncing: Boolean,
+  isSidebarCollapsed: Boolean
 });
 
 defineEmits(['toggle-sidebar', 'update:searchQuery', 'sync']);
@@ -40,13 +54,22 @@ defineEmits(['toggle-sidebar', 'update:searchQuery', 'sync']);
   position: fixed;
   top: 0;
   right: 0;
-  width: calc(100% - 220px);
+  width: calc(100% - 240px);
   height: 52px;
   z-index: 1030;
   background-color: rgba(255, 255, 255, 0.9);
   backdrop-filter: blur(8px);
   border-bottom: 1px solid #e2e8f0;
+  transition: width 0.3s ease;
 }
-@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+.top-header.header-expanded {
+  width: 100%;
+}
+
+@keyframes spin { 
+  0% { transform: rotate(0deg); } 
+  100% { transform: rotate(360deg); } 
+}
 .spin { animation: spin 0.6s linear infinite; }
 </style>

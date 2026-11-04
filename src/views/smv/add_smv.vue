@@ -5,9 +5,15 @@
       <div class="card border-0 rounded-0 m-0 p-0 shadow-none bg-white w-100">
         <div class="card-header bg-white py-2 px-3 border-bottom d-flex justify-content-between align-items-center rounded-0">
           <h6 class="m-0 fw-bold text-dark d-flex align-items-center gap-2">
-            <i class="bi bi-journal-text text-primary"></i> Operations Library
+            <i class="bi bi-journal-text text-primary"></i> 
+            {{ isEditing ? 'Edit Operations Library' : 'Operations Library' }}
           </h6>
-          <span class="badge bg-light text-secondary border font-monospace px-2 py-0.5" style="font-size: 0.7rem;">SMV Management Module</span>
+          <div class="d-flex align-items-center gap-2">
+            <button v-if="isEditing" type="button" class="btn btn-outline-secondary btn-xs px-2 py-0.5 rounded-0" @click="$emit('cancelEdit')" style="font-size: 0.7rem;">
+              ← Back to List
+            </button>
+            <span class="badge bg-light text-secondary border font-monospace px-2 py-0.5" style="font-size: 0.7rem;">SMV Management Module</span>
+          </div>
         </div>
 
         <div class="card-body bg-white p-2 m-0 w-100">
@@ -16,7 +22,7 @@
             <div class="row g-2 align-items-center">
               <div class="col-md-4">
                 <label for="uniqueItemSelect" class="form-label text-secondary fw-semibold mb-1" style="font-size: 0.75rem;">Item Name</label>
-                <select id="uniqueItemSelect" v-model="form.itemName" class="form-select form-select-xs shadow-none py-1 rounded-0">
+                <select id="uniqueItemSelect" v-model="form.itemName" class="form-select form-select-xs shadow-none py-1 rounded-0" :disabled="isEditing">
                   <option value="">-- Select Item --</option>
                   <option v-for="item in cachedItems" :key="item" :value="item">
                     {{ item }}
@@ -112,12 +118,15 @@
 
           <!-- Bottom Action Group -->
           <div class="d-flex justify-content-between align-items-center mt-2 px-0">
-            <button type="button" class="btn btn-outline-secondary btn-xs px-2 py-1 bg-white rounded-0" @click="addLibraryRow" style="font-size: 0.75rem;">
-              + Add Row Manually
-            </button>
-            <button type="submit" class="btn btn-primary btn-xs px-3 py-1 fw-bold rounded-0" id="btn-save-smv" style="font-size: 0.75rem;">
-              Save Operations
-            </button>
+
+            <div class="d-flex gap-2">
+              <button v-if="isEditing" type="button" class="btn btn-outline-secondary btn-xs px-3 py-1 rounded-0" @click="$emit('cancelEdit')" style="font-size: 0.75rem;">
+                Cancel
+              </button>
+              <button type="submit" class="btn btn-primary btn-xs px-3 py-1 fw-bold rounded-0" id="btn-save-smv" style="font-size: 0.75rem;">
+                {{ isEditing ? 'Update Operations' : 'Save Operations' }}
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -126,8 +135,17 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, onMounted, watch } from 'vue';
 import { smvAPI } from '@/services/smv_api';
+
+const props = defineProps({
+  editData: {
+    type: Object,
+    default: null
+  }
+});
+
+const emit = defineEmits(['saved', 'cancelEdit']);
 
 const cachedMachineTypes = ref([]);
 const cachedItems = ref([]);
@@ -139,12 +157,54 @@ const form = reactive({
 });
 
 const operations = ref([]);
+const isEditing = ref(false);
 
 onMounted(() => {
   loadSmvItems();
   loadMachineTypes();
-  fetchInitialOpCodeAndBuildFirstRow();
+  
+  if (props.editData) {
+    populateEditData(props.editData);
+  } else {
+    fetchInitialOpCodeAndBuildFirstRow();
+  }
 });
+
+// Watch for external prop changes if component is reused for different items
+watch(() => props.editData, (newVal) => {
+  if (newVal) {
+    populateEditData(newVal);
+  } else {
+    resetForm();
+  }
+});
+
+function populateEditData(data) {
+  isEditing.value = true;
+  form.itemName = data.itemName || data['Item Name'] || '';
+  form.size = data.size || data['Garments Size'] || '';
+
+  if (Array.isArray(data.operations) && data.operations.length > 0) {
+    operations.value = data.operations.map(op => {
+      const smvVal = parseFloat(op.smv || op.SMV || 0);
+      return {
+        opCode: op.opCode || op['Op Code'] || getNextOpCode(),
+        machineType: op.machineType || op['Machine Type'] || '',
+        machineTools: op.machineTools || op['Machine Tools'] || '',
+        processDesc: op.processDesc || op['Process Description'] || '',
+        operationGrade: op.operationGrade || op['Operation Grade'] || '',
+        seamLength: op.seamLength || op['Seam Length'] || '',
+        seamFreq: op.seamFreq || op['Seam Freq'] || '',
+        spi: op.spi || op.SPI || '',
+        skill: op.skill || op.Skill || 'Operator',
+        smv: smvVal,
+        target100: smvVal > 0 ? Math.round(60 / smvVal) : 0
+      };
+    });
+  } else {
+    fetchInitialOpCodeAndBuildFirstRow();
+  }
+}
 
 // Dedicated parser for Item names matching your console keys
 function parseItemData(dataList) {
@@ -153,7 +213,6 @@ function parseItemData(dataList) {
     if (!item) return '';
     if (Array.isArray(item)) return String(item[0] || '').trim();
     if (typeof item === 'object') {
-      // Target 'Item Name' with space as shown in your console
       const val = item['Item Name'] || item.itemName || item.item_Name || item.Item_Name || item.ItemName || item.name || item.Item || item.item || '';
       return String(val).trim();
     }
@@ -169,8 +228,7 @@ function parseMachineData(dataList) {
     if (!item) return '';
     if (Array.isArray(item)) return String(item[1] !== undefined ? item[1] : item[0]).trim();
     if (typeof item === 'object') {
-      // Target 'Machine Type' with space as shown in your console, completely bypassing 'Brand'
-      const val = item['Machine Type'] || item.machineType || item.MachineType || item.machine_type || item.machineName || item.MachineName || item.type || item.Type || '';
+      const val = item['MachineType'] || item.machineType || item.MachineType || '';
       return String(val).trim();
     }
     return String(item).trim();
@@ -220,8 +278,18 @@ function addLibraryRow() {
 }
 
 function handleMachineTypeChange(index) {
-  const row = operations.value.index; // fixed reference if needed or index
-  if (operations.value[index].machineType !== '' && index === operations.value.length - 1) {
+  const row = operations.value[index];
+  if (!row) return;
+
+  const selectedMachine = (row.machineType || '').toUpperCase().trim();
+
+  if (selectedMachine === 'MANUAL' || selectedMachine === 'HELPER') {
+    row.skill = 'Helper';
+  } else {
+    row.skill = 'Operator';
+  }
+
+  if (row.machineType !== '' && index === operations.value.length - 1) {
     addLibraryRow();
   }
 }
@@ -266,6 +334,7 @@ async function loadMachineTypes() {
 }
 
 function resetForm() {
+  isEditing.value = false;
   form.itemName = '';
   form.size = '';
   operations.value = [];
@@ -293,10 +362,20 @@ async function handleLibraryFormSubmit() {
   };
 
   try {
-    // Ensure this matches the exact Sheet Name inside your Google Sheet
-    await smvAPI.createRecord('Operations', payload);
-    alert("Operations saved successfully!");
-    resetForm();
+    if (isEditing.value) {
+      // Call update record API if available, or create/overwrite
+      if (typeof smvAPI.updateRecord === 'function') {
+        await smvAPI.updateRecord('Operations', payload);
+      } else {
+        await smvAPI.createRecord('Operations', payload);
+      }
+      alert("Operations updated successfully!");
+      emit('saved');
+    } else {
+      await smvAPI.createRecord('Operations', payload);
+      alert("Operations saved successfully!");
+      resetForm();
+    }
   } catch (error) {
     alert("Failed to save Operations: " + (error?.message || error));
   }

@@ -1,48 +1,39 @@
-// src/router/index.js
-import { createWebHistory, createRouter } from 'vue-router'
-import DashboardLayout from '@/views/Dashboard.vue' // Assumes this is your layout containing <router-view>
-
+import { createRouter, createWebHistory } from 'vue-router';
+import DashboardLayout from '@/components/layout/Dashboard.vue';
+import Dashboard from '@/views/Dashboard.vue';
 
 const routes = [
-  { 
-    path: '/', 
-    component: DashboardLayout, // Parent layout with sidebar & header
+  {
+    path: '/',
+    component: DashboardLayout, // This renders your Sidebar + Header + Layout wrapper
     children: [
       {
-        path: '', // Default child loaded at root '/'
-        name: 'DashboardHome',
-        component: () => import('@/views/Dashboard.vue') // Or your main dashboard stats component
+        path: '', // This loads Dashboard.vue inside the layout's <RouterView /> at root '/'
+        name: 'Dashboard',
+        component: Dashboard
       },
-      { 
-        path: '/user', // Renders at /user inside the dashboard layout
-        name: 'Users', 
-         component: () => import('@/components/User/user.vue')
+      {
+        path: '/item_list',
+        name: 'ItemList',
+        component: () => import('@/views/Library/item_list.vue')
       },
-      { 
-        path: '/Empolyee_Evaluation', // Renders at /user inside the dashboard layout
-        name: 'Skill Test', 
-        component: () => import('@/components/EmpolyeeEvaluation/Empolyee_Evaluation.vue')
+      {
+        path: '/machine_list',
+        name: 'MachineList',
+        component: () => import('@/views/Library/machine_list.vue')
       },
-       { 
-        path: '/item_list', // Renders at /user inside the dashboard layout
-        name: 'Item', 
-        component: () => import('@/components/Library/item_list.vue')
-      },
-       { 
-        path: '/machine_list', // Renders at /user inside the dashboard layout
-        name: 'machine', 
-        component: () => import('@/components/Library/machine_list.vue')
-      },
-       { 
-        path: '/add_smv', // Renders at /user inside the dashboard layout
-        name: 'smv', 
-        component: () => import('@/components/smv/add_smv.vue')
+      {
+        path: '/user',
+        name: 'UserList',
+        component: () => import('@/views/User/user.vue')
       }
     ]
-  },
-]
+  }
+];
 
-export const router = createRouter({
+const router = createRouter({
   history: createWebHistory(),
-  routes,
-})
+  routes
+});
+
+export default router;

@@ -1,14 +1,9 @@
-// Separate deployed URL constants for your respective Google Apps Script projects
-
-
 const DEPLOYED_URL = 'https://script.google.com/macros/s/AKfycbwF3VOrJGQUQx8HozZQH6g63pAsnSXWbYw085H0Eq7INj90Vj5Q_K61hlAeTrVsXYHn/exec';
-
-
 const ITEM_API_URL = 'https://script.google.com/macros/s/AKfycbw_S55LMULdm84N3jSbRyOavrghKDjSRap-Od-wvpHmJJrqzFtzSVekxMi3FpKc8tcU/exec';
-const MACHINE_API_URL = 'https://script.google.com/macros/s/AKfycbwF3VOrJGQUQx8HozZQH6g63pAsnSXWbYw085H0Eq7INj90Vj5Q_K61hlAeTrVsXYHn/exec';
+// Items and Machines share the same backend project context in your sheet config
+const MACHINE_API_URL = ITEM_API_URL; 
 
 export const smvAPI = {
-  // Generic read records method with optional custom URL
   async readRecords(sheetName, customUrl = ITEM_API_URL) {
     if (typeof google !== 'undefined' && google.script && google.script.run) {
       return new Promise((resolve, reject) => {
@@ -32,29 +27,28 @@ export const smvAPI = {
         throw new Error(result.error || 'Server returned an error');
       }
       
-      return result; 
+      // Support standard ResponseUtil wrapper structures
+      return result.data || result; 
     } catch (err) {
       console.error('Fetch error:', err);
       throw new Error(err.message || 'Failed to fetch data from backend');
     }
   },
 
-async getItems() {
+  async getItems() {
     const res = await this.readRecords('Items', ITEM_API_URL);
-    console.log("Items API Raw Response:", res); // Check browser console F12 to see this
-    // Handles array directly, or nested inside items, data, or records
     if (Array.isArray(res)) return res;
     return res?.items || res?.data?.items || res?.records || res?.data || [];
   },
 
-  async getMachines() {
+async getMachines() {
     const res = await this.readRecords('Machines', MACHINE_API_URL);
-    console.log("Machines API Raw Response:", res); // Check browser console F12 to see this
+    console.log("Machines API Raw Response:", res); // Check browser F12 console to see this
     if (Array.isArray(res)) return res;
-    return res?.machine || res?.machines || res?.data?.machine || res?.data?.machines || res?.records || res?.data || [];
+    // Supports arrays nested under common property keys or direct data results
+    return res?.machines || res?.machine || res?.data?.machines || res?.data?.machine || res?.records || res?.data || res?.items || [];
   },
 
-  // Create record (e.g. saving SMV operations or entries)
   async createRecord(sheetName = 'Operations', data = {}, customUrl = DEPLOYED_URL) {
     if (typeof google !== 'undefined' && google.script && google.script.run) {
       return new Promise((resolve, reject) => {
@@ -84,7 +78,6 @@ async getItems() {
     }
   },
 
-  // Update record
   async updateRecord(sheetName, recordId, recordData, customUrl = DEPLOYED_URL) {
     if (typeof google !== 'undefined' && google.script && google.script.run) {
       return new Promise((resolve, reject) => {
@@ -114,7 +107,6 @@ async getItems() {
     }
   },
 
-  // Delete record
   async deleteRecord(sheetName, recordId, customUrl = DEPLOYED_URL) {
     if (typeof google !== 'undefined' && google.script && google.script.run) {
       return new Promise((resolve, reject) => {
