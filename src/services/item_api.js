@@ -1,19 +1,20 @@
-// src/services/api.js
-import { DEPLOYED_URL } from '@/config.js';
+// src/services/item_api.js
+
+const DEPLOYED_URL = 'https://script.google.com/macros/s/AKfycbyv2VCjQg4OyB2a-BhLAeasoaMfccpx3XxgJpiqYBvNjNsuwFH1EifuIqINlPxBdBmo/exec';
 
 export const dbAPI = {
   async readRecords(sheetName = 'Items') {
     if (typeof google !== 'undefined' && google.script && google.script.run) {
       return new Promise((resolve, reject) => {
         google.script.run
-          .withSuccessHandler(resolve)
+          .withSuccessHandler(res => resolve(res?.data || res))
           .withFailureHandler(reject)
           .readRecords(sheetName);
       });
     }
 
     try {
-      const response = await fetch(`${DEPLOYED_URL}?sheetName=${encodeURIComponent(sheetName)}`, {
+      const response = await fetch(`${DEPLOYED_URL}?action=index&sheetName=${encodeURIComponent(sheetName)}`, {
         method: 'GET',
         redirect: 'follow'
       });
@@ -21,10 +22,13 @@ export const dbAPI = {
       if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
       
       const result = await response.json();
-      if (result.status !== 'success') throw new Error(result.error || 'Server returned unsuccessful response');
       
-      // Return the full result object so components can handle result.items or result.users
-      return result; 
+      if (result.success === false) {
+        throw new Error(result.error || 'Server returned unsuccessful response');
+      }
+      
+      // Return result.data directly as an array for consistency
+      return result.data || []; 
     } catch (err) {
       console.error('Fetch error:', err);
       throw new Error(err.message || 'Failed to fetch data from backend');
@@ -52,7 +56,9 @@ export const dbAPI = {
       if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
 
       const result = await response.json();
-      if (result.status !== 'success') throw new Error(result.error || 'Failed to create record');
+      if (result.success === false || (result.status && result.status !== 'success')) {
+        throw new Error(result.error || result.message || 'Failed to create record');
+      }
       return result.data;
     } catch (err) {
       console.error('Fetch error:', err);
@@ -81,7 +87,9 @@ export const dbAPI = {
       if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
 
       const result = await response.json();
-      if (result.status !== 'success') throw new Error(result.error || 'Failed to update record');
+      if (result.success === false || (result.status && result.status !== 'success')) {
+        throw new Error(result.error || result.message || 'Failed to update record');
+      }
       return result.data;
     } catch (err) {
       console.error('Fetch error:', err);
@@ -89,7 +97,7 @@ export const dbAPI = {
     }
   },
 
-  async deleteRecord(sheetName = 'Items', recordId) {
+ async deleteRecord(sheetName = 'Items', recordId) {
     if (typeof google !== 'undefined' && google.script && google.script.run) {
       return new Promise((resolve, reject) => {
         google.script.run
@@ -100,21 +108,26 @@ export const dbAPI = {
     }
 
     try {
+      // Ensure recordId is cleanly wrapped whether it's passed as a number or object
+      const payload = typeof recordId === 'object' ? recordId : { rowIndex: recordId };
+
       const response = await fetch(DEPLOYED_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'delete', sheetName, id: recordId }),
+        body: JSON.stringify({ action: 'delete', sheetName, id: payload.rowIndex || payload.ID, payload }),
         redirect: 'follow'
       });
 
       if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
 
       const result = await response.json();
-      if (result.status !== 'success') throw new Error(result.error || 'Failed to delete record');
+      if (result.success === false || (result.status && result.status !== 'success')) {
+        throw new Error(result.error || result.message || 'Failed to delete record');
+      }
       return result.data;
     } catch (err) {
       console.error('Fetch error:', err);
       throw new Error(err.message || 'Failed to communicate with Apps Script');
     }
-  }
+  },
 };

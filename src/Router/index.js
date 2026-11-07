@@ -33,7 +33,7 @@ const routes = [
         component: () => import('@/views/smv/add_smv.vue')
       },
       {
-        path: '/edit_smv/:id',
+        path: '/edit/:itemName?',
         name: 'EditSMV',
         component: () => import('@/views/smv/edit_smv.vue')
       },
@@ -46,6 +46,20 @@ const routes = [
         path: '/Empolyee_Evaluation',
         name: 'EmpolyeeEvaluation',
         component: () => import('@/views/EmpolyeeEvaluation/Empolyee_Evaluation.vue')
+      },
+        {
+        path: '/add_ob',
+        name: 'AddOB',
+        component: () => import('@/views/operationBreakdown/add_ob.vue')
+      },
+        {
+        path: '/ob_list',
+        name: 'OBList',
+        component: () => import('@/views/operationBreakdown/ob_list.vue')
+      },  {
+        path: '/edit_ob/:PO_No?',
+        name: 'EditOB',
+        component: () => import('@/views/operationBreakdown/edit_ob.vue')
       }
     ]
   }

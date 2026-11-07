@@ -23,7 +23,6 @@
           </tr>
         </thead>
         <tbody>
-          <!-- Uses handleRowClick correctly -->
           <tr 
             v-for="row in filteredAndSortedRows" 
             :key="row.id" 
@@ -45,8 +44,10 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue';
-import { smvAPI } from '@/services/smv_api';
+import { useRouter } from 'vue-router';
+import { dbAPI as smvAPI } from '@/services/operations_api.js'; 
 
+const router = useRouter();
 const emit = defineEmits(['edit-item']);
 
 const searchQuery = ref('');
@@ -56,21 +57,21 @@ const rows = ref([]);
 
 const fetchItems = async () => {
   try {
-    const response = await smvAPI.getItems();
+    const response = await smvAPI.readRecords('Operations');
     const rawData = response.items || response.data || response;
     
     const uniqueItemsMap = {};
 
     if (Array.isArray(rawData)) {
       rawData.forEach((item, index) => {
-        const itemName = String(item['Item Name'] || item.itemName || item.name || '').trim();
+        const itemName = String(item['Item_Name'] || item['Item Name'] || item.itemName || item.name || '').trim();
         if (!itemName) return;
 
         if (!uniqueItemsMap[itemName]) {
           uniqueItemsMap[itemName] = {
             id: item.ID || item.id || index + 1,
             itemName: itemName,
-            size: item['Garments Size'] || item.size || ''
+            size: item['Garments_Size'] || item['Garments Size'] || item.size || ''
           };
         }
       });
@@ -86,23 +87,31 @@ onMounted(fetchItems);
 
 const handleRowClick = async (row) => {
   try {
-    console.log("Fetching relative operations for:", row.itemName);
-    const response = await smvAPI.getItems(); 
+    console.log("Navigating/fetching operations for:", row.itemName);
+    
+    // Option A: If using Vue Router navigation:
+    router.push({ 
+      name: 'EditSMV', // Ensure this matches your router/index.js route name
+      params: { itemName: row.itemName } 
+    });
+
+    // Option B: If you prefer keeping event emission alongside router push:
+    const response = await smvAPI.readRecords('Operations'); 
     const rawData = response.items || response.data || response;
 
     const relativeOperations = [];
     if (Array.isArray(rawData)) {
       rawData.forEach(item => {
-        const currentItemName = String(item['Item Name'] || item.itemName || item.name || '').trim();
+        const currentItemName = String(item['Item_Name'] || item['Item Name'] || item.itemName || '').trim();
         if (currentItemName.toLowerCase() === row.itemName.toLowerCase()) {
           relativeOperations.push({
-            opCode: item['Op Code'] || item.opCode || `OP-${1001 + relativeOperations.length}`,
-            machineType: item['Machine Type'] || item.machineType || '',
-            machineTools: item['Machine Tools'] || item.machineTools || '',
-            processDesc: item['Process Description'] || item.processDesc || '',
-            operationGrade: item['Operation Grade'] || item.operationGrade || '',
-            seamLength: item['Seam Length'] || item.seamLength || '',
-            seamFreq: item['Seam Freq'] || item.seamFreq || '',
+            opCode: item['OpCode'] || item['Op Code'] || item.opCode || `OP-${1001 + relativeOperations.length}`,
+            machineType: item['MachineType'] || item['Machine Type'] || item.machineType || '',
+            machineTools: item['MachineTools'] || item['Machine Tools'] || item.machineTools || '',
+            processDesc: item['ProcessDescription'] || item['Process Description'] || item.processDesc || '',
+            operationGrade: item['OperationGrade'] || item['Operation Grade'] || item.operationGrade || '',
+            seamLength: item['SeamLength'] || item['Seam Length'] || item.seamLength || '',
+            seamFreq: item['SeamFreq'] || item['Seam Freq'] || item.seamFreq || '',
             spi: item['SPI'] || item.spi || '',
             skill: item['Skill'] || item.skill || 'Operator',
             smv: parseFloat(item['SMV'] || item.smv || 0)
@@ -116,7 +125,6 @@ const handleRowClick = async (row) => {
       operations: relativeOperations
     };
 
-    console.log("Opening edit form with payload:", payload);
     emit('edit-item', payload);
 
   } catch (error) {

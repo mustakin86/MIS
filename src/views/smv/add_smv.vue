@@ -63,14 +63,14 @@
                     <input 
                       type="text" 
                       class="form-control form-control-xs text-center bg-light font-monospace fw-semibold px-1 py-0 rounded-0" 
-                      :value="row.opCode" 
+                      :value="row.OpCode" 
                       readonly 
                     >
                   </td>
                   <td>
                     <select 
                       class="form-select form-select-xs shadow-none px-1 py-0 rounded-0" 
-                      v-model="row.machineType"
+                      v-model="row.MachineType"
                       @change="handleMachineTypeChange(index)"
                     >
                       <option value="">-- Select --</option>
@@ -79,17 +79,17 @@
                       </option>
                     </select>
                   </td>
-                  <td><input type="text" class="form-control form-control-xs shadow-none px-1 py-0 rounded-0" v-model="row.machineTools" placeholder="Tools"></td>
-                  <td><input type="text" class="form-control form-control-xs shadow-none px-1 py-0 rounded-0" v-model="row.processDesc" placeholder="Operation / Process Name"></td>
-                  <td><input type="text" class="form-control form-control-xs shadow-none text-center px-0.5 py-0 rounded-0" v-model="row.operationGrade"></td>
-                  <td><input type="text" class="form-control form-control-xs shadow-none text-end px-0.5 py-0 rounded-0" v-model="row.seamLength"></td>
-                  <td><input type="text" class="form-control form-control-xs shadow-none text-end px-0.5 py-0 rounded-0" v-model="row.seamFreq"></td>
-                  <td><input type="text" class="form-control form-control-xs shadow-none text-end px-0.5 py-0 rounded-0" v-model="row.spi"></td>
+                  <td><input type="text" class="form-control form-control-xs shadow-none px-1 py-0 rounded-0" v-model="row.MachineTools" placeholder="Tools"></td>
+                  <td><input type="text" class="form-control form-control-xs shadow-none px-1 py-0 rounded-0" v-model="row.ProcessDescription" placeholder="Operation / Process Name"></td>
+                  <td><input type="text" class="form-control form-control-xs shadow-none text-center px-0.5 py-0 rounded-0" v-model="row.OperationGrade"></td>
+                  <td><input type="text" class="form-control form-control-xs shadow-none text-end px-0.5 py-0 rounded-0" v-model="row.Seam_Length"></td>
+                  <td><input type="text" class="form-control form-control-xs shadow-none text-end px-0.5 py-0 rounded-0" v-model="row.SeamFreq"></td>
+                  <td><input type="text" class="form-control form-control-xs shadow-none text-end px-0.5 py-0 rounded-0" v-model="row.SPI"></td>
                   <td>
                     <input 
                       type="text" 
                       class="form-control form-control-xs text-center bg-light font-monospace px-1 py-0 rounded-0" 
-                      v-model="row.skill" 
+                      v-model="row.Skill" 
                       readonly 
                     >
                   </td>
@@ -99,12 +99,12 @@
                       step="0.001" 
                       min="0" 
                       class="form-control form-control-xs shadow-none text-end font-monospace px-1 py-0 rounded-0" 
-                      v-model.number="row.smv"
+                      v-model.number="row.SMV"
                       @input="calculateTarget(row)"
                     >
                   </td>
                   <td class="text-center fw-bold font-monospace bg-light text-success py-0" style="font-size: 0.75rem;">
-                    {{ row.target100 }}
+                    {{ row.Target }}
                   </td>
                   <td class="text-center p-0">
                     <button type="button" class="btn btn-outline-danger btn-xs border-0 px-1 py-0 text-danger rounded-0" @click="removeRow(index)" title="Remove Row">
@@ -118,7 +118,11 @@
 
           <!-- Bottom Action Group -->
           <div class="d-flex justify-content-between align-items-center mt-2 px-0">
-
+            <div class="d-flex gap-2">
+              <button type="button" class="btn btn-outline-secondary btn-xs px-3 py-1 rounded-0" @click="addLibraryRow" style="font-size: 0.75rem;">
+                + Add Row
+              </button>
+            </div>
             <div class="d-flex gap-2">
               <button v-if="isEditing" type="button" class="btn btn-outline-secondary btn-xs px-3 py-1 rounded-0" @click="$emit('cancelEdit')" style="font-size: 0.75rem;">
                 Cancel
@@ -136,7 +140,9 @@
 
 <script setup>
 import { ref, reactive, onMounted, watch } from 'vue';
-import { smvAPI } from '@/services/smv_api';
+import { dbAPI as smvAPI } from '@/services/operations_api.js'; 
+import { dbAPI as ItemApi } from '@/services/item_api.js';
+import { dbAPI as MachineApi } from '@/services/machine_api.js';
 
 const props = defineProps({
   editData: {
@@ -170,7 +176,6 @@ onMounted(() => {
   }
 });
 
-// Watch for external prop changes if component is reused for different items
 watch(() => props.editData, (newVal) => {
   if (newVal) {
     populateEditData(newVal);
@@ -181,24 +186,27 @@ watch(() => props.editData, (newVal) => {
 
 function populateEditData(data) {
   isEditing.value = true;
-  form.itemName = data.itemName || data['Item Name'] || '';
-  form.size = data.size || data['Garments Size'] || '';
+  form.itemName = data.Item_Name || data.itemName || data['Item Name'] || data.Item_name || '';
+  form.size = data.Garments_Size || data.size || data['Garments Size'] || '';
 
   if (Array.isArray(data.operations) && data.operations.length > 0) {
     operations.value = data.operations.map(op => {
-      const smvVal = parseFloat(op.smv || op.SMV || 0);
+      const smvVal = parseFloat(op.SMV || op.smv || 0);
       return {
-        opCode: op.opCode || op['Op Code'] || getNextOpCode(),
-        machineType: op.machineType || op['Machine Type'] || '',
-        machineTools: op.machineTools || op['Machine Tools'] || '',
-        processDesc: op.processDesc || op['Process Description'] || '',
-        operationGrade: op.operationGrade || op['Operation Grade'] || '',
-        seamLength: op.seamLength || op['Seam Length'] || '',
-        seamFreq: op.seamFreq || op['Seam Freq'] || '',
-        spi: op.spi || op.SPI || '',
-        skill: op.skill || op.Skill || 'Operator',
-        smv: smvVal,
-        target100: smvVal > 0 ? Math.round(60 / smvVal) : 0
+        OpCode: op.OpCode || op.opCode || op['Op Code'] || getNextOpCode(),
+        MachineType: op.MachineType || op.machineType || op['Machine Type'] || '',
+        MachineTools: op.MachineTools || op.machineTools || op['Machine Tools'] || '',
+        ProcessDescription: op.ProcessDescription || op.processDesc || op['Process Description'] || '',
+        OperationGrade: op.OperationGrade || op.operationGrade || op['Operation Grade'] || '',
+        
+        // Comprehensive fallback for all possible seam length property names from the database
+       Seam_Length: op.Seam_Length || op.seamLength || op['Seam Length'] || op['Seam Len'] || op.seam_length || '',
+        
+        SeamFreq: op.SeamFreq || op.seamFreq || op['Seam Freq'] || op.Seam_Freq || '',
+        SPI: op.SPI || op.spi || '',
+        Skill: op.Skill || op.skill || 'Operator',
+        SMV: smvVal,
+        Target: smvVal > 0 ? Math.round(60 / smvVal) : 0
       };
     });
   } else {
@@ -206,14 +214,13 @@ function populateEditData(data) {
   }
 }
 
-// Dedicated parser for Item names matching your console keys
 function parseItemData(dataList) {
   if (!Array.isArray(dataList)) return [];
   const extracted = dataList.map(item => {
     if (!item) return '';
     if (Array.isArray(item)) return String(item[0] || '').trim();
     if (typeof item === 'object') {
-      const val = item['Item Name'] || item.itemName || item.item_Name || item.Item_Name || item.ItemName || item.name || item.Item || item.item || '';
+      const val = item['Item_Name'] || item['Item_name'] || item.itemName || item.item_Name || item.ItemName || item.name || item.Item || item.item || '';
       return String(val).trim();
     }
     return String(item).trim();
@@ -221,14 +228,13 @@ function parseItemData(dataList) {
   return [...new Set(extracted)];
 }
 
-// Dedicated parser for Machine types matching your console keys
 function parseMachineData(dataList) {
   if (!Array.isArray(dataList)) return [];
   const extracted = dataList.map(item => {
     if (!item) return '';
     if (Array.isArray(item)) return String(item[1] !== undefined ? item[1] : item[0]).trim();
     if (typeof item === 'object') {
-      const val = item['MachineType'] || item.machineType || item.MachineType || '';
+      const val = item['MachineType'] || item.machineType || item['Machine Type'] || '';
       return String(val).trim();
     }
     return String(item).trim();
@@ -263,17 +269,17 @@ function fetchInitialOpCodeAndBuildFirstRow() {
 
 function addLibraryRow() {
   operations.value.push({
-    opCode: getNextOpCode(),
-    machineType: '',
-    machineTools: '',
-    processDesc: '',
-    operationGrade: '',
-    seamLength: '',
-    seamFreq: '',
-    spi: '',
-    skill: 'Operator',
-    smv: 0,
-    target100: 0
+    OpCode: getNextOpCode(),
+    MachineType: '',
+    MachineTools: '',
+    ProcessDescription: '',
+    OperationGrade: '',
+    Seam_Length: '',
+    SeamFreq: '',
+    SPI: '',
+    Skill: 'Operator',
+    SMV: 0,
+    Target: 0
   });
 }
 
@@ -281,43 +287,43 @@ function handleMachineTypeChange(index) {
   const row = operations.value[index];
   if (!row) return;
 
-  const selectedMachine = (row.machineType || '').toUpperCase().trim();
+  const selectedMachine = (row.MachineType || '').toUpperCase().trim();
 
   if (selectedMachine === 'MANUAL' || selectedMachine === 'HELPER') {
-    row.skill = 'Helper';
+    row.Skill = 'Helper';
   } else {
-    row.skill = 'Operator';
+    row.Skill = 'Operator';
   }
 
-  if (row.machineType !== '' && index === operations.value.length - 1) {
+  if (row.MachineType !== '' && index === operations.value.length - 1) {
     addLibraryRow();
   }
 }
 
 function calculateTarget(row) {
-  const smvVal = parseFloat(row.smv) || 0;
-  row.target100 = smvVal > 0 ? Math.round(60 / smvVal) : 0;
+  const smvVal = parseFloat(row.SMV) || 0;
+  row.Target = smvVal > 0 ? Math.round(60 / smvVal) : 0;
 }
 
 function removeRow(index) {
   if (operations.value.length > 1) {
     operations.value.splice(index, 1);
   } else {
-    operations.value[0].machineType = '';
-    operations.value[0].machineTools = '';
-    operations.value[0].processDesc = '';
-    operations.value[0].operationGrade = '';
-    operations.value[0].seamLength = '';
-    operations.value[0].seamFreq = '';
-    operations.value[0].spi = '';
-    operations.value[0].smv = 0;
-    operations.value[0].target100 = 0;
+    operations.value[0].MachineType = '';
+    operations.value[0].MachineTools = '';
+    operations.value[0].ProcessDescription = '';
+    operations.value[0].OperationGrade = '';
+    operations.value[0].Seam_Length = '';
+    operations.value[0].SeamFreq = '';
+    operations.value[0].SPI = '';
+    operations.value[0].SMV = 0;
+    operations.value[0].Target = 0;
   }
 }
 
 async function loadSmvItems() {
   try {
-    const rawItems = await smvAPI.getItems();
+    const rawItems = typeof ItemApi.getItems === 'function' ? await ItemApi.getItems() : await ItemApi.readRecords('ItemData');
     cachedItems.value = parseItemData(rawItems);
   } catch (err) {
     console.error("Failed to load items:", err);
@@ -326,7 +332,7 @@ async function loadSmvItems() {
 
 async function loadMachineTypes() {
   try {
-    const rawMachines = await smvAPI.getMachines();
+    const rawMachines = typeof MachineApi.getMachines === 'function' ? await MachineApi.getMachines() : await MachineApi.readRecords('Machines');
     cachedMachineTypes.value = parseMachineData(rawMachines);
   } catch (err) {
     console.error("Failed to load machine types:", err);
@@ -348,22 +354,39 @@ async function handleLibraryFormSubmit() {
     return;
   }
 
-  const validOperations = operations.value.filter(op => op.machineType || op.processDesc || op.smv > 0);
+  // Filter operations using the exact capitalized keys
+  const validOperations = operations.value.filter(op => op.MachineType || op.ProcessDescription || op.SMV > 0);
 
   if (validOperations.length === 0) {
     alert("Please enter at least one operation with a Machine Type or Process Description.");
     return;
   }
 
+  const timestamp = new Date().toISOString();
   const payload = {
-    item_Name: form.itemName.trim(),
-    size: form.size.trim(),
-    operations: validOperations
+    Item_Name: form.itemName.trim(),
+    Garments_Size: form.size.trim(),
+    operations: validOperations.map((op, idx) => ({
+      ID: `SMV-${Date.now()}-${idx + 1}`,
+      Item_Name: form.itemName.trim(),
+      Garments_Size: form.size.trim(),
+      OpCode: op.OpCode,
+      MachineType: op.MachineType,
+      MachineTools: op.MachineTools,
+      ProcessDescription: op.ProcessDescription,
+      OperationGrade: op.OperationGrade,
+      Seam_Length: op.Seam_Length,
+      SeamFreq: op.SeamFreq,
+      SPI: op.SPI,
+      Skill: op.Skill,
+      SMV: parseFloat(op.SMV) || 0,
+      Target: op.Target,
+      Created_Date: timestamp
+    }))
   };
 
   try {
     if (isEditing.value) {
-      // Call update record API if available, or create/overwrite
       if (typeof smvAPI.updateRecord === 'function') {
         await smvAPI.updateRecord('Operations', payload);
       } else {

@@ -1,14 +1,16 @@
-import { DEPLOYED_URL } from '@/config.js';
+// src/services/operations_api.js
+
+const DEPLOYED_URL = 'https://script.google.com/macros/s/AKfycbx1Rc0LBPVMS1A6qDnfVUFJPAMziEUA4Jy2RaRLYGnVwJMvTQ5Cz6rb97CtgMBMKCeFkg/exec';
 
 export const dbAPI = {
-  async readRecords(sheetName = 'Machines') {
+  async readRecords(sheetName = 'Operations') {
     if (typeof google !== 'undefined' && google.script && google.script.run) {
       return new Promise((resolve, reject) => {
         google.script.run
           .withSuccessHandler(res => {
             if (!res) return resolve([]);
             if (Array.isArray(res)) return resolve(res);
-            const data = res.machines || res.data || res.items || res.users || res.operations || [];
+            const data = res.operations || res.data || res.items || res.machines || res.users || [];
             resolve(Array.isArray(data) ? data : []);
           })
           .withFailureHandler(reject)
@@ -26,9 +28,11 @@ export const dbAPI = {
       if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
       const result = await response.json();
 
-      if (result.status === 'error') throw new Error(result.error);
+      if (result.status === 'error' || result.success === false) {
+        throw new Error(result.error || result.message || 'Server returned an error');
+      }
 
-      const records = result.machines || result.data || result.items || result.users || result.operations || result;
+      const records = result.operations || result.data || result.items || result.machines || result.users || result;
       return Array.isArray(records) ? records : [];
     } catch (err) {
       console.error("Fetch Error details:", err);
@@ -36,7 +40,7 @@ export const dbAPI = {
     }
   },
 
-  async createRecord(sheetName = 'Machines', data = {}) {
+  async createRecord(sheetName = 'Operations', data = {}) {
     if (typeof google !== 'undefined' && google.script && google.script.run) {
       return new Promise((resolve, reject) => {
         google.script.run
@@ -56,11 +60,19 @@ export const dbAPI = {
 
     if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
     const result = await response.json();
-    if (result.status === 'error') throw new Error(result.error);
+    if (result.status === 'error' || result.success === false) {
+      throw new Error(result.error || result.message || 'Failed to create record');
+    }
     return result.data || result;
   },
 
-  async updateRecord(sheetName = 'Machines', recordId, recordData) {
+  async updateRecord(sheetName = 'Operations', recordId, recordData) {
+    // If recordId is omitted and passed directly as the payload object, shift arguments
+    if (typeof recordId === 'object' && recordId !== null && !recordData) {
+      recordData = recordId;
+      recordId = recordData.Item_Name || recordData.item_Name || recordData.itemName || 'update';
+    }
+
     if (typeof google !== 'undefined' && google.script && google.script.run) {
       return new Promise((resolve, reject) => {
         google.script.run
@@ -80,11 +92,13 @@ export const dbAPI = {
 
     if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
     const result = await response.json();
-    if (result.status === 'error') throw new Error(result.error);
+    if (result.status === 'error' || result.success === false) {
+      throw new Error(result.error || result.message || 'Failed to update record');
+    }
     return result.data || result;
   },
 
-  async deleteRecord(sheetName = 'Machines', recordId) {
+  async deleteRecord(sheetName = 'Operations', recordId) {
     if (typeof google !== 'undefined' && google.script && google.script.run) {
       return new Promise((resolve, reject) => {
         google.script.run
@@ -104,7 +118,9 @@ export const dbAPI = {
 
     if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
     const result = await response.json();
-    if (result.status === 'error') throw new Error(result.error);
+    if (result.status === 'error' || result.success === false) {
+      throw new Error(result.error || result.message || 'Failed to delete record');
+    }
     return result.data || result;
   }
 };

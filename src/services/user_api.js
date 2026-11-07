@@ -2,20 +2,20 @@
 
 import { DEPLOYED_URL } from '@/config.js';
 
-
 export const dbAPI = {
+  // Read Users (GET: users.index)
   async readRecords(sheetName = 'Users') {
     if (typeof google !== 'undefined' && google.script && google.script.run) {
       return new Promise((resolve, reject) => {
         google.script.run
           .withSuccessHandler(resolve)
           .withFailureHandler(reject)
-          .readRecords(sheetName);
+          .index(sheetName);
       });
     }
 
     try {
-      const response = await fetch(`${DEPLOYED_URL}?sheetName=${encodeURIComponent(sheetName)}`, {
+      const response = await fetch(`${DEPLOYED_URL}?action=users.index&sheetName=${encodeURIComponent(sheetName)}`, {
         method: 'GET',
         redirect: 'follow'
       });
@@ -23,23 +23,23 @@ export const dbAPI = {
       if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
       
       const result = await response.json();
-      if (result.status !== 'success') throw new Error(result.error || 'Server returned unsuccessful response');
+      if (result.status !== 'success') throw new Error(result.message || 'Failed to fetch data');
       
-      // Return the full result object so the component can access result.users
-      return result;
+      return result.data; // Returns array of users
     } catch (err) {
       console.error('Fetch error:', err);
       throw new Error(err.message || 'Failed to fetch data from backend');
     }
   },
 
-  async createRecord(sheetName = 'Users', data = {}) {
+  // Create User (POST: users.store)
+  async createRecord(sheetName = 'Users', userData = {}) {
     if (typeof google !== 'undefined' && google.script && google.script.run) {
       return new Promise((resolve, reject) => {
         google.script.run
           .withSuccessHandler(resolve)
           .withFailureHandler(reject)
-          .createRecord(sheetName, data);
+          .store(sheetName, userData);
       });
     }
 
@@ -47,14 +47,14 @@ export const dbAPI = {
       const response = await fetch(DEPLOYED_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'create', sheetName, data }),
+        body: JSON.stringify({ action: 'users.store', sheetName, user: userData }),
         redirect: 'follow'
       });
 
       if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
 
       const result = await response.json();
-      if (result.status !== 'success') throw new Error(result.error || 'Failed to create record');
+      if (result.status !== 'success') throw new Error(result.message || 'Failed to create record');
       return result.data;
     } catch (err) {
       console.error('Fetch error:', err);
@@ -62,13 +62,14 @@ export const dbAPI = {
     }
   },
 
-  async updateRecord(sheetName = 'Users', recordId, recordData) {
+  // Update User (POST: users.update)
+  async updateRecord(sheetName = 'Users', recordId, recordData = {}) {
     if (typeof google !== 'undefined' && google.script && google.script.run) {
       return new Promise((resolve, reject) => {
         google.script.run
           .withSuccessHandler(resolve)
           .withFailureHandler(reject)
-          .updateRecord(sheetName, recordId, recordData);
+          .update(sheetName, recordData);
       });
     }
 
@@ -76,14 +77,18 @@ export const dbAPI = {
       const response = await fetch(DEPLOYED_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'update', sheetName, id: recordId, data: recordData }),
+        body: JSON.stringify({ 
+          action: 'users.update', 
+          sheetName,
+          user: { ID: recordId, ...recordData } 
+        }),
         redirect: 'follow'
       });
 
       if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
 
       const result = await response.json();
-      if (result.status !== 'success') throw new Error(result.error || 'Failed to update record');
+      if (result.status !== 'success') throw new Error(result.message || 'Failed to update record');
       return result.data;
     } catch (err) {
       console.error('Fetch error:', err);
@@ -91,13 +96,14 @@ export const dbAPI = {
     }
   },
 
+  // Delete User (POST: users.delete)
   async deleteRecord(sheetName = 'Users', recordId) {
     if (typeof google !== 'undefined' && google.script && google.script.run) {
       return new Promise((resolve, reject) => {
         google.script.run
           .withSuccessHandler(resolve)
           .withFailureHandler(reject)
-          .deleteRecord(sheetName, recordId);
+          .destroy(sheetName, { ID: recordId });
       });
     }
 
@@ -105,14 +111,14 @@ export const dbAPI = {
       const response = await fetch(DEPLOYED_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action: 'delete', sheetName, id: recordId }),
+        body: JSON.stringify({ action: 'users.delete', sheetName, ID: recordId }),
         redirect: 'follow'
       });
 
       if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
 
       const result = await response.json();
-      if (result.status !== 'success') throw new Error(result.error || 'Failed to delete record');
+      if (result.status !== 'success') throw new Error(result.message || 'Failed to delete record');
       return result.data;
     } catch (err) {
       console.error('Fetch error:', err);

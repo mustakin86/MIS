@@ -1,105 +1,143 @@
-import { DEPLOYED_URL } from '@/config.js';
+// src/services/machine_api.js
+
+const DEPLOYED_URL = 'https://script.google.com/macros/s/AKfycbwmOZZMNuk5x0or1mPqSMPBhslRsVKF0LKHnzgO2Omfry-uNmLLklYCweSTKtnh2ity/exec';
 
 export const dbAPI = {
+  // Read Machines (GET)
   async readRecords(sheetName = 'Machines') {
     if (typeof google !== 'undefined' && google.script && google.script.run) {
       return new Promise((resolve, reject) => {
         google.script.run
-          .withSuccessHandler(res => {
-            if (!res) return resolve([]);
-            if (Array.isArray(res)) return resolve(res);
-            const data = res.machines || res.data || res.items || res.users || res.operations || [];
-            resolve(Array.isArray(data) ? data : []);
-          })
+          .withSuccessHandler(res => resolve(res?.data || res))
           .withFailureHandler(reject)
-          .readRecords(sheetName);
+          .index(sheetName);
       });
     }
 
-    const response = await fetch(`${DEPLOYED_URL}?action=read&sheetName=${encodeURIComponent(sheetName)}`, {
-      method: 'GET',
-      mode: 'cors',
-      redirect: 'follow'
-    });
+    try {
+      const response = await fetch(`${DEPLOYED_URL}?action=index&sheetName=${encodeURIComponent(sheetName)}`, {
+        method: 'GET',
+        redirect: 'follow'
+      });
 
-    if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
-    const result = await response.json();
-
-    if (result.status === 'error') throw new Error(result.error);
-
-    const records = result.machines || result.data || result.items || result.users || result.operations || result;
-    return Array.isArray(records) ? records : [];
+      if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
+      
+      const result = await response.json();
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to fetch data');
+      }
+      return result.data || [];
+    } catch (err) {
+      console.error('Fetch error:', err);
+      throw new Error(err.message || 'Failed to fetch data from backend');
+    }
   },
 
-  async createRecord(sheetName = 'Machines', data = {}) {
+  // Create Machine (POST)
+  async createRecord(machineData = {}, sheetName = 'Machines') {
     if (typeof google !== 'undefined' && google.script && google.script.run) {
       return new Promise((resolve, reject) => {
         google.script.run
           .withSuccessHandler(res => resolve(res?.data || res))
           .withFailureHandler(reject)
-          .createRecord(sheetName, data);
+          .store(sheetName, machineData);
       });
     }
 
-    const response = await fetch(DEPLOYED_URL, {
-      method: 'POST',
-      mode: 'cors',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action: 'create', sheetName, data }),
-      redirect: 'follow'
-    });
+    try {
+      const response = await fetch(DEPLOYED_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ 
+          action: 'create', 
+          sheetName, 
+          payload: machineData 
+        }),
+        redirect: 'follow'
+      });
 
-    if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
-    const result = await response.json();
-    if (result.status === 'error') throw new Error(result.error);
-    return result.data || result;
+      if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
+
+      const result = await response.json();
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to create record');
+      }
+      return result.data;
+    } catch (err) {
+      console.error('Fetch error:', err);
+      throw new Error(err.message || 'Failed to communicate with Apps Script');
+    }
   },
 
-  async updateRecord(sheetName = 'Machines', recordId, recordData) {
+  // Update Machine (POST)
+  async updateRecord(machineData = {}, sheetName = 'Machines') {
     if (typeof google !== 'undefined' && google.script && google.script.run) {
       return new Promise((resolve, reject) => {
         google.script.run
           .withSuccessHandler(res => resolve(res?.data || res))
           .withFailureHandler(reject)
-          .updateRecord(sheetName, recordId, recordData);
+          .update(sheetName, machineData);
       });
     }
 
-    const response = await fetch(DEPLOYED_URL, {
-      method: 'POST',
-      mode: 'cors',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action: 'update', sheetName, id: recordId, data: recordData }),
-      redirect: 'follow'
-    });
+    try {
+      const response = await fetch(DEPLOYED_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ 
+          action: 'update', 
+          sheetName,
+          payload: machineData 
+        }),
+        redirect: 'follow'
+      });
 
-    if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
-    const result = await response.json();
-    if (result.status === 'error') throw new Error(result.error);
-    return result.data || result;
+      if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
+
+      const result = await response.json();
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to update record');
+      }
+      return result.data;
+    } catch (err) {
+      console.error('Fetch error:', err);
+      throw new Error(err.message || 'Failed to communicate with Apps Script');
+    }
   },
 
-  async deleteRecord(sheetName = 'Machines', recordId) {
+  // Delete Machine (POST)
+  async deleteRecord(rowIndex, sheetName = 'Machines') {
     if (typeof google !== 'undefined' && google.script && google.script.run) {
       return new Promise((resolve, reject) => {
         google.script.run
           .withSuccessHandler(res => resolve(res?.data || res))
           .withFailureHandler(reject)
-          .deleteRecord(sheetName, recordId);
+          .destroy(sheetName, { rowIndex: rowIndex });
       });
     }
 
-    const response = await fetch(DEPLOYED_URL, {
-      method: 'POST',
-      mode: 'cors',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action: 'delete', sheetName, id: recordId }),
-      redirect: 'follow'
-    });
+    try {
+      const response = await fetch(DEPLOYED_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ 
+          action: 'delete', 
+          sheetName, 
+          payload: { rowIndex } 
+        }),
+        redirect: 'follow'
+      });
 
-    if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
-    const result = await response.json();
-    if (result.status === 'error') throw new Error(result.error);
-    return result.data || result;
+      if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
+
+      const result = await response.json();
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to delete record');
+      }
+      return result.data;
+    } catch (err) {
+      console.error('Fetch error:', err);
+      throw new Error(err.message || 'Failed to communicate with Apps Script');
+    }
   }
 };

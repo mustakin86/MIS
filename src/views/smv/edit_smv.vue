@@ -5,10 +5,10 @@
         <div class="card-header bg-white py-2 px-3 border-bottom d-flex justify-content-between align-items-center rounded-0">
           <h6 class="m-0 fw-bold text-dark d-flex align-items-center gap-2">
             <i class="bi bi-journal-text text-primary"></i> 
-            Edit Operations Library
+            {{ isEditing ? 'Edit Operations Library' : 'Operations Library' }}
           </h6>
           <div class="d-flex align-items-center gap-2">
-            <button type="button" class="btn btn-outline-secondary btn-xs px-2 py-0.5 rounded-0" @click="$emit('cancelEdit')" style="font-size: 0.7rem;">
+            <button type="button" class="btn btn-outline-secondary btn-xs px-2 py-0.5 rounded-0" @click="goBackToList" style="font-size: 0.7rem;">
               ← Back to List
             </button>
             <span class="badge bg-light text-secondary border font-monospace px-2 py-0.5" style="font-size: 0.7rem;">SMV Management Module</span>
@@ -20,7 +20,12 @@
             <div class="row g-2 align-items-center">
               <div class="col-md-4">
                 <label for="uniqueItemSelect" class="form-label text-secondary fw-semibold mb-1" style="font-size: 0.75rem;">Item Name</label>
-                <select id="uniqueItemSelect" v-model="form.itemName" class="form-select form-select-xs shadow-none py-1 rounded-0" disabled>
+                <select 
+                  id="uniqueItemSelect" 
+                  v-model="form.itemName" 
+                  class="form-select form-select-xs shadow-none py-1 rounded-0"
+                  @change="handleItemSelectChange"
+                >
                   <option value="">-- Select Item --</option>
                   <option v-for="item in cachedItems" :key="item" :value="item">
                     {{ item }}
@@ -34,7 +39,7 @@
             </div>
           </div>
 
-          <!-- Relative Data Grid Table -->
+          <!-- Data Grid Table -->
           <div class="table-responsive m-0 p-0 border border-light-subtle w-100">
             <table class="table table-bordered table-hover align-middle m-0 w-100 excel-table">
               <thead class="table-light text-uppercase text-secondary">
@@ -94,11 +99,11 @@
               + Add Row Manually
             </button>
             <div class="d-flex gap-2">
-              <button type="button" class="btn btn-outline-secondary btn-xs px-3 py-1 rounded-0" @click="$emit('cancelEdit')" style="font-size: 0.75rem;">
+              <button type="button" class="btn btn-outline-secondary btn-xs px-3 py-1 rounded-0" @click="goBackToList" style="font-size: 0.75rem;">
                 Cancel
               </button>
               <button type="submit" class="btn btn-primary btn-xs px-3 py-1 fw-bold rounded-0" style="font-size: 0.75rem;">
-                Update Operations
+                {{ isEditing ? 'Update Operations' : 'Save Operations' }}
               </button>
             </div>
           </div>
@@ -110,26 +115,37 @@
 
 <script setup>
 import { ref, reactive, onMounted, watch } from 'vue';
-import { smvAPI } from '@/services/smv_api';
+import { useRoute, useRouter } from 'vue-router';
+import { dbAPI as smvAPI } from '@/services/operations_api.js'; 
 
 const props = defineProps({
   editData: { type: Object, default: null }
 });
 
 const emit = defineEmits(['saved', 'cancelEdit']);
+const route = useRoute();
+const router = useRouter();
 
 const cachedMachineTypes = ref([]);
 const cachedItems = ref([]);
+const isEditing = ref(false);
 let currentOpCodeNum = 1001;
 
 const form = reactive({ itemName: '', size: '' });
 const operations = ref([]);
 
-onMounted(() => {
-  loadSmvItems();
-  loadMachineTypes();
+onMounted(async () => {
+  await loadSmvItems();
+  await loadMachineTypes();
+
+  const routeItemName = route?.params?.itemName;
+
   if (props.editData) {
     populateEditData(props.editData);
+  } else if (routeItemName) {
+    await fetchOperationsByItemName(routeItemName);
+  } else {
+    resetForm();
   }
 });
 
@@ -137,11 +153,65 @@ watch(() => props.editData, (newVal) => {
   if (newVal) populateEditData(newVal);
 });
 
+function goBackToList() {
+  emit('cancelEdit');
+  // Navigate to your SMV list route (update route name/path if different)
+  router.push({ name: 'SmvList' });
+}
+
+async function handleItemSelectChange() {
+  if (!form.itemName) {
+    resetForm();
+    return;
+  }
+  await fetchOperationsByItemName(form.itemName);
+}
+
+async function fetchOperationsByItemName(selectedItem) {
+  try {
+    isEditing.value = true;
+    form.itemName = selectedItem;
+
+    const rawData = await smvAPI.readRecords('Operations');
+    const records = Array.isArray(rawData) ? rawData : (rawData.items || rawData.data || []);
+
+    const matchedOps = records.filter(item => {
+      const name = String(item['Item_Name'] || item['Item Name'] || item.itemName || '').trim();
+      return name.toLowerCase() === selectedItem.toLowerCase();
+    });
+
+    if (matchedOps.length > 0) {
+      form.size = matchedOps[0]['Garments_Size'] || matchedOps[0]['Garments Size'] || matchedOps[0].size || '';
+      
+      operations.value = matchedOps.map((op, idx) => {
+        const smvVal = parseFloat(op.smv || op['SMV'] || 0);
+        return {
+          opCode: op.opCode || op['OpCode'] || op['Op Code'] || `OP-${1001 + idx}`,
+          machineType: op.machineType || op['MachineType'] || op['Machine Type'] || '',
+          machineTools: op.machineTools || op['MachineTools'] || op['Machine Tools'] || '',
+          processDesc: op.processDesc || op['ProcessDescription'] || op['Process Description'] || '',
+          operationGrade: op.operationGrade || op['OperationGrade'] || op['Operation Grade'] || '',
+          seamLength: op.seamLength || op['SeamLength'] || op['Seam Length'] || '',
+          seamFreq: op.seamFreq || op['SeamFreq'] || op['Seam Freq'] || '',
+          spi: op.spi || op['SPI'] || '',
+          skill: op.skill || op['Skill'] || 'Operator',
+          smv: smvVal,
+          target100: smvVal > 0 ? Math.round(60 / smvVal) : 0
+        };
+      });
+    } else {
+      resetOperationsTable();
+    }
+  } catch (err) {
+    console.error("Error fetching operations for item:", err);
+    resetOperationsTable();
+  }
+}
+
 function populateEditData(data) {
-  console.log("Populating Form with Backend Data:", data);
-  
-  form.itemName = data.itemName || data['Item Name'] || '';
-  form.size = data.size || data['Garments Size'] || '';
+  isEditing.value = true;
+  form.itemName = data.itemName || data['Item_Name'] || data['Item Name'] || data.item_Name || '';
+  form.size = data.size || data['Garments_Size'] || data['Garments Size'] || '';
 
   if (form.itemName && !cachedItems.value.includes(form.itemName)) {
     cachedItems.value.push(form.itemName);
@@ -151,14 +221,13 @@ function populateEditData(data) {
     operations.value = data.operations.map(op => {
       const smvVal = parseFloat(op.smv || op['SMV'] || 0);
       return {
-        // Explicitly map using your exact Google Sheet JSON keys
-        opCode: op.opCode || op['Op Code'] || `OP-${currentOpCodeNum++}`,
-        machineType: op.machineType || op['Machine Type'] || '',
-        machineTools: op.machineTools || op['Machine Tools'] || '',
-        processDesc: op.processDesc || op['Process Description'] || '',
-        operationGrade: op.operationGrade || op['Operation Grade'] || '',
-        seamLength: op.seamLength || op['Seam Length'] || '',
-        seamFreq: op.seamFreq || op['Seam Freq'] || '',
+        opCode: op.opCode || op['OpCode'] || op['Op Code'] || `OP-${currentOpCodeNum++}`,
+        machineType: op.machineType || op['MachineType'] || op['Machine Type'] || '',
+        machineTools: op.machineTools || op['MachineTools'] || op['Machine Tools'] || '',
+        processDesc: op.processDesc || op['ProcessDescription'] || op['Process Description'] || '',
+        operationGrade: op.operationGrade || op['OperationGrade'] || op['Operation Grade'] || '',
+        seamLength: op.seamLength || op['SeamLength'] || op['Seam Length'] || '',
+        seamFreq: op.seamFreq || op['SeamFreq'] || op['Seam Freq'] || '',
         spi: op.spi || op['SPI'] || '',
         skill: op.skill || op['Skill'] || 'Operator',
         smv: smvVal,
@@ -166,18 +235,41 @@ function populateEditData(data) {
       };
     });
   } else {
-    addLibraryRow();
+    resetOperationsTable();
   }
 }
 
 function parseItemData(dataList) {
   if (!Array.isArray(dataList)) return [];
-  return [...new Set(dataList.map(item => typeof item === 'object' ? (item['Item Name'] || item.itemName || item.name || '') : String(item)).filter(Boolean))];
+  return [...new Set(dataList.map(item => {
+    if (typeof item === 'object') {
+      return item['Item_Name'] || item['Item Name'] || item.itemName || item.name || '';
+    }
+    return String(item);
+  }).filter(Boolean))];
 }
 
 function parseMachineData(dataList) {
   if (!Array.isArray(dataList)) return [];
-  return [...new Set(dataList.map(item => typeof item === 'object' ? (item['Machine Type'] || item.machineType || '') : String(item)).filter(Boolean))];
+  return [...new Set(dataList.map(item => {
+    if (typeof item === 'object') {
+      return item['MachineType'] || item['Machine Type'] || item.machineType || '';
+    }
+    return String(item);
+  }).filter(Boolean))];
+}
+
+function resetForm() {
+  isEditing.value = false;
+  form.itemName = '';
+  form.size = '';
+  resetOperationsTable();
+}
+
+function resetOperationsTable() {
+  currentOpCodeNum = 1001;
+  operations.value = [];
+  addLibraryRow();
 }
 
 function addLibraryRow() {
@@ -217,18 +309,25 @@ function removeRow(index) {
 
 async function loadSmvItems() {
   try {
-    const items = parseItemData(await smvAPI.getItems());
-    cachedItems.value = items;
+    const rawData = await smvAPI.readRecords('Operations');
+    const records = Array.isArray(rawData) ? rawData : (rawData.items || rawData.data || []);
+    cachedItems.value = parseItemData(records);
     if (form.itemName && !cachedItems.value.includes(form.itemName)) {
       cachedItems.value.push(form.itemName);
     }
-  } catch (err) { console.error(err); }
+  } catch (err) { 
+    console.error("Failed to load items:", err); 
+  }
 }
 
 async function loadMachineTypes() {
   try {
-    cachedMachineTypes.value = parseMachineData(await smvAPI.getMachines());
-  } catch (err) { console.error(err); }
+    const rawData = await smvAPI.readRecords('Machines');
+    const records = Array.isArray(rawData) ? rawData : (rawData.items || rawData.data || []);
+    cachedMachineTypes.value = parseMachineData(records);
+  } catch (err) { 
+    console.error("Failed to load machine types:", err); 
+  }
 }
 
 async function handleLibraryFormSubmit() {
@@ -242,13 +341,24 @@ async function handleLibraryFormSubmit() {
     return;
   }
 
-  const payload = { item_Name: form.itemName.trim(), size: form.size.trim(), operations: validOperations };
+  const payload = { 
+    Item_Name: form.itemName.trim(), 
+    Garments_Size: form.size.trim(), 
+    operations: validOperations 
+  };
+  
   try {
     if (typeof smvAPI.updateRecord === 'function') {
-      await smvAPI.updateRecord('Operations', payload);
+      await smvAPI.updateRecord('Operations', form.itemName.trim(), payload);
+    } else {
+      await smvAPI.createRecord('Operations', payload);
     }
     alert("Operations updated successfully!");
+    
     emit('saved');
+    
+    // Redirect to SMV List page
+    router.push({ name: 'SMVList' });
   } catch (error) {
     alert("Failed to save: " + (error?.message || error));
   }
