@@ -8,7 +8,8 @@
             <span class="fw-bold fs-6 tracking-wide">Machine List</span>
           </div>
         </div>
-        <button @click="openAddModal" class="btn btn-primary btn-sm text-white fw-bold px-1 shadow-sm py-1 font-monospace">
+        <button @click="openAddModal"
+          class="btn btn-primary btn-sm text-white fw-bold px-1 shadow-sm py-1 font-monospace">
           + Add Machine
         </button>
       </div>
@@ -20,7 +21,7 @@
         <div class="spinner-border spinner-border-sm text-success me-2" role="status"></div>
         Reading workbook range from database...
       </div>
-      
+
       <template v-else>
         <!-- Scrollable Table Wrapper -->
         <div class="excel-table-container">
@@ -69,7 +70,8 @@
         </div>
 
         <!-- Spreadsheet Bottom Sheet Status Bar -->
-        <div class="excel-status-bar card-footer bg-white d-flex justify-content-between align-items-center py-1 px-2 border-top">
+        <div
+          class="excel-status-bar card-footer bg-white d-flex justify-content-between align-items-center py-1 px-2 border-top">
           <div class="d-flex align-items-center gap-2"></div>
 
           <!-- Pagination Controls -->
@@ -78,21 +80,15 @@
               Viewing rows {{ paginationStart }}–{{ paginationEnd }} of {{ items.length }}
             </span>
             <div class="btn-group btn-group-sm" role="group">
-              <button 
-                class="btn btn-outline-secondary px-2 py-0 font-monospace text-dark" 
-                :disabled="currentPage === 1" 
-                @click="currentPage--"
-              >
+              <button class="btn btn-outline-secondary px-2 py-0 font-monospace text-dark" :disabled="currentPage === 1"
+                @click="currentPage--">
                 ◀ Prev
               </button>
               <button class="btn btn-outline-secondary px-2 py-0 disabled text-dark bg-white font-monospace">
                 {{ currentPage }} / {{ totalPages || 1 }}
               </button>
-              <button 
-                class="btn btn-outline-secondary px-2 py-0 font-monospace text-dark" 
-                :disabled="currentPage >= totalPages" 
-                @click="currentPage++"
-              >
+              <button class="btn btn-outline-secondary px-2 py-0 font-monospace text-dark"
+                :disabled="currentPage >= totalPages" @click="currentPage++">
                 Next ▶
               </button>
             </div>
@@ -102,51 +98,61 @@
     </div>
 
     <!-- Machine Modal Popup Form -->
-    <div class="modal fade" :class="{ show: showModal }" :style="{ display: showModal ? 'block' : 'none' }" tabindex="-1" aria-hidden="true">
+    <div class="modal fade" :class="{ show: showModal }" :style="{ display: showModal ? 'block' : 'none' }"
+      tabindex="-1" aria-hidden="true">
       <div class="modal-dialog modal-dialog-centered modal-lg">
         <div class="modal-content border-success shadow-lg">
           <div class="modal-header py-2 bg-excel-green text-white">
             <h5 class="modal-title fs-6 fw-bold d-flex align-items-center gap-2">
               <i class="bi bi-table"></i> {{ isEditing ? 'Edit Machine Record' : 'Insert New Machine Row' }}
             </h5>
-            <button type="button" class="btn-close btn-close-white btn-sm" @click="closeModal" aria-label="Close"></button>
+            <button type="button" class="btn-close btn-close-white btn-sm" @click="closeModal"
+              aria-label="Close"></button>
           </div>
           <div class="modal-body py-3 bg-light">
             <div class="row g-2">
               <div class="col-md-4">
                 <label class="form-label small fw-bold text-secondary font-monospace">Brand</label>
-                <input v-model="form.Brand" class="form-control form-control-sm excel-input shadow-none" placeholder="Brand name" />
+                <input v-model="form.Brand" class="form-control form-control-sm excel-input shadow-none"
+                  placeholder="Brand name" />
               </div>
               <div class="col-md-4">
                 <label class="form-label small fw-bold text-secondary font-monospace">Machine Type</label>
-                <input v-model="form.MachineType" class="form-control form-control-sm excel-input shadow-none" placeholder="Type" />
+                <input v-model="form.MachineType" class="form-control form-control-sm excel-input shadow-none"
+                  placeholder="Type" />
               </div>
 
               <div class="col-md-3">
                 <label class="form-label small fw-bold text-secondary font-monospace">RPM</label>
-                <input v-model.number="form.RPM" type="number" class="form-control form-control-sm excel-input shadow-none" placeholder="RPM" />
+                <input v-model.number="form.RPM" type="number"
+                  class="form-control form-control-sm excel-input shadow-none" placeholder="RPM" />
               </div>
               <div class="col-md-3">
                 <label class="form-label small fw-bold text-secondary font-monospace">SPI</label>
-                <input v-model.number="form.SPI" type="number" class="form-control form-control-sm excel-input shadow-none" placeholder="SPI" />
+                <input v-model.number="form.SPI" type="number"
+                  class="form-control form-control-sm excel-input shadow-none" placeholder="SPI" />
               </div>
               <div class="col-md-3">
                 <label class="form-label small fw-bold text-secondary font-monospace">Bobine</label>
-                <input v-model.number="form.Bobine" type="number" class="form-control form-control-sm excel-input shadow-none" placeholder="Bobine" />
+                <input v-model.number="form.Bobine" type="number"
+                  class="form-control form-control-sm excel-input shadow-none" placeholder="Bobine" />
               </div>
               <div class="col-md-3">
                 <label class="form-label small fw-bold text-secondary font-monospace">Lopper</label>
-                <input v-model.number="form.Lopper" type="number" class="form-control form-control-sm excel-input shadow-none" placeholder="Lopper" />
+                <input v-model.number="form.Lopper" type="number"
+                  class="form-control form-control-sm excel-input shadow-none" placeholder="Lopper" />
               </div>
 
               <div class="col-md-12">
                 <label class="form-label small fw-bold text-secondary font-monospace">Remarks</label>
-                <input v-model="form.Remarks" class="form-control form-control-sm excel-input shadow-none" placeholder="Optional remarks..." />
+                <input v-model="form.Remarks" class="form-control form-control-sm excel-input shadow-none"
+                  placeholder="Optional remarks..." />
               </div>
             </div>
           </div>
           <div class="modal-footer py-2 bg-white">
-            <button type="button" class="btn btn-outline-secondary btn-sm px-3 font-monospace" @click="closeModal">Cancel</button>
+            <button type="button" class="btn btn-outline-secondary btn-sm px-3 font-monospace"
+              @click="closeModal">Cancel</button>
             <button @click="saveItem" :disabled="loading" class="btn btn-success btn-sm px-4 font-monospace fw-bold">
               {{ loading ? 'Saving...' : (isEditing ? 'Commit Update' : 'Insert Row') }}
             </button>
@@ -169,7 +175,7 @@ const editingRowIndex = ref(null);
 const showModal = ref(false);
 
 const currentPage = ref(1);
-const pageSize = ref(8);
+const pageSize = ref(30);
 
 const getInitialForm = () => ({
   ID: '',
@@ -327,7 +333,7 @@ onMounted(() => {
   border: 1px solid #c7d2fe;
   background: #ffffff;
   margin-bottom: 6px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
 .excel-card {
@@ -336,7 +342,7 @@ onMounted(() => {
 }
 
 .excel-table-container {
-  max-height: 420px;
+  max-height: 550px;
   overflow-y: auto;
   overflow-x: auto;
   position: relative;
@@ -396,6 +402,7 @@ onMounted(() => {
   font-size: 0.85rem;
   border-radius: 1px;
 }
+
 .excel-input:focus {
   border-color: #107c41;
   box-shadow: 0 0 0 0.2rem rgba(16, 124, 65, 0.15) !important;
