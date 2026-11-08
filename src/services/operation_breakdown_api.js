@@ -3,7 +3,7 @@ const DEPLOYED_URL = 'https://script.google.com/macros/s/AKfycby0I4W65bwlSkeB37J
 /**
  * Helper function to handle POST requests consistently
  */
-async function postToAPI(payload) {
+export async function dbAPI(payload) {
   const response = await fetch(DEPLOYED_URL, {
     method: 'POST',
     mode: 'cors',
@@ -46,7 +46,7 @@ export const obAPI = {
   },
 
   async createRecord(sheetName = 'Header', data = {}) {
-    return await postToAPI({
+    return await dbAPI({
       action: 'create',
       sheetName,
       data
@@ -65,7 +65,7 @@ export const obAPI = {
       }
     }
 
-    return await postToAPI({
+    return await dbAPI({
       action: 'update',
       sheetName,
       id: recordId,
@@ -78,7 +78,7 @@ export const obAPI = {
       throw new Error('Delete requires a valid record ID.');
     }
 
-    return await postToAPI({
+    return await dbAPI({
       action: 'delete',
       sheetName,
       id: recordId

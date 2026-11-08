@@ -29,8 +29,9 @@
                   </option>
                 </select>
               </div>
+              
               <div class="col-md-2">
-                <label for="size" class="form-label text-secondary fw-semibold mb-1" style="font-size: 0.75rem;">Garments Size</label>
+               <span class="input-group-text" id="basic-addon1">@</span>
                 <input type="text" id="size" v-model="form.size" class="form-control form-control-xs shadow-none py-1 rounded-0" placeholder="e.g., S, M, L">
               </div>
             </div>
@@ -38,7 +39,7 @@
 
           <!-- Data Grid Table Wrapper with 100% Fluid Width -->
           <div class="table-responsive m-0 p-0 border border-light-subtle w-100">
-            <table class="table table-bordered table-hover align-middle m-0 w-100 excel-table">
+            <table class="table table-bordered table-hover align-middle m-0 w-100 excel-grid">
               <thead class="table-light text-uppercase text-secondary">
                 <tr>
                   <th style="width: 30px;" class="text-center">SL</th>
@@ -58,20 +59,22 @@
               </thead>
               <tbody>
                 <tr v-for="(row, index) in operations" :key="index">
-                  <td class="text-center text-muted fw-bold" style="font-size: 0.7rem;">{{ index + 1 }}</td>
-                  <td>
+                  <td class="text-center text-muted fw-bold p-0 m-0" style="font-size: 0.7rem;">{{ index + 1 }}</td>
+                  <td class="p-0 m-0">
                     <input 
                       type="text" 
-                      class="form-control form-control-xs text-center bg-light font-monospace fw-semibold px-1 py-0 rounded-0" 
-                      :value="row.OpCode" 
+                      class="form-control form-control-xs text-center bg-light font-monospace fw-semibold rounded-0 border-0" 
+                      v-model="row.OpCode" 
                       readonly 
                     >
                   </td>
-                  <td>
+                  <td class="p-0 m-0">
                     <select 
-                      class="form-select form-select-xs shadow-none px-1 py-0 rounded-0" 
+                      class="form-select form-select-xs shadow-none rounded-0 border-0" 
                       v-model="row.MachineType"
                       @change="handleMachineTypeChange(index)"
+                      :ref="el => setInputRef(el, index, 1)"
+                      @keydown="handleKeyNavigation($event, index, 1)"
                     >
                       <option value="">-- Select --</option>
                       <option v-for="machine in cachedMachineTypes" :key="machine" :value="machine">
@@ -79,35 +82,89 @@
                       </option>
                     </select>
                   </td>
-                  <td><input type="text" class="form-control form-control-xs shadow-none px-1 py-0 rounded-0" v-model="row.MachineTools" placeholder="Tools"></td>
-                  <td><input type="text" class="form-control form-control-xs shadow-none px-1 py-0 rounded-0" v-model="row.ProcessDescription" placeholder="Operation / Process Name"></td>
-                  <td><input type="text" class="form-control form-control-xs shadow-none text-center px-0.5 py-0 rounded-0" v-model="row.OperationGrade"></td>
-                  <td><input type="text" class="form-control form-control-xs shadow-none text-end px-0.5 py-0 rounded-0" v-model="row.Seam_Length"></td>
-                  <td><input type="text" class="form-control form-control-xs shadow-none text-end px-0.5 py-0 rounded-0" v-model="row.SeamFreq"></td>
-                  <td><input type="text" class="form-control form-control-xs shadow-none text-end px-0.5 py-0 rounded-0" v-model="row.SPI"></td>
-                  <td>
+                  <td class="p-0 m-0">
                     <input 
                       type="text" 
-                      class="form-control form-control-xs text-center bg-light font-monospace px-1 py-0 rounded-0" 
-                      v-model="row.Skill" 
-                      readonly 
+                      class="form-control form-control-xs shadow-none rounded-0 border-0" 
+                      v-model="row.MachineTools" 
+                      placeholder="Tools"
+                      :ref="el => setInputRef(el, index, 2)"
+                      @keydown="handleKeyNavigation($event, index, 2)"
                     >
                   </td>
-                  <td>
+                  <td class="p-0 m-0">
+                    <input 
+                      type="text" 
+                      class="form-control form-control-xs shadow-none rounded-0 border-0" 
+                      v-model="row.ProcessDescription" 
+                      @input="row.ProcessDescription = row.ProcessDescription.toUpperCase()"
+                      placeholder="Operation / Process Name"
+                      :ref="el => setInputRef(el, index, 3)"
+                      @keydown="handleKeyNavigation($event, index, 3)"
+                    >
+                  </td>
+                  <td class="p-0 m-0">
+                    <input 
+                      type="text" 
+                      class="form-control form-control-xs shadow-none text-center rounded-0 border-0" 
+                      v-model="row.OperationGrade"
+                      :ref="el => setInputRef(el, index, 4)"
+                      @keydown="handleKeyNavigation($event, index, 4)"
+                    >
+                  </td>
+                  <td class="p-0 m-0">
+                    <input 
+                      type="text" 
+                      class="form-control form-control-xs shadow-none text-end rounded-0 border-0" 
+                      v-model="row.Seam_Length"
+                      :ref="el => setInputRef(el, index, 5)"
+                      @keydown="handleKeyNavigation($event, index, 5)"
+                    >
+                  </td>
+                  <td class="p-0 m-0">
+                    <input 
+                      type="text" 
+                      class="form-control form-control-xs shadow-none text-end rounded-0 border-0" 
+                      v-model="row.SeamFreq"
+                      :ref="el => setInputRef(el, index, 6)"
+                      @keydown="handleKeyNavigation($event, index, 6)"
+                    >
+                  </td>
+                  <td class="p-0 m-0">
+                    <input 
+                      type="text" 
+                      class="form-control form-control-xs shadow-none text-end rounded-0 border-0" 
+                      v-model="row.SPI"
+                      :ref="el => setInputRef(el, index, 7)"
+                      @keydown="handleKeyNavigation($event, index, 7)"
+                    >
+                  </td>
+                 <td class="p-0 m-0">
+  <input 
+    type="text" 
+    class="form-control form-control-xs text-center bg-light font-monospace rounded-0 border-0 fw-bold text-uppercase" 
+    :class="row.Skill === 'Helper' ? 'text-danger' : 'text-primary'"
+    v-model="row.Skill" 
+    readonly 
+  >
+</td>
+                  <td class="p-0 m-0">
                     <input 
                       type="number" 
                       step="0.001" 
                       min="0" 
-                      class="form-control form-control-xs shadow-none text-end font-monospace px-1 py-0 rounded-0" 
+                      class="form-control form-control-xs shadow-none font-monospace rounded-0 border-0" 
                       v-model.number="row.SMV"
                       @input="calculateTarget(row)"
+                      :ref="el => setInputRef(el, index, 9)"
+                      @keydown="handleKeyNavigation($event, index, 9)"
                     >
                   </td>
-                  <td class="text-center fw-bold font-monospace bg-light text-success py-0" style="font-size: 0.75rem;">
+                  <td class="text-center fw-bold font-monospace bg-light text-success p-0 m-0" style="font-size: 0.75rem;">
                     {{ row.Target }}
                   </td>
-                  <td class="text-center p-0">
-                    <button type="button" class="btn btn-outline-danger btn-xs border-0 px-1 py-0 text-danger rounded-0" @click="removeRow(index)" title="Remove Row">
+                  <td class="text-center p-0 m-0">
+                    <button type="button" class="btn btn-outline-danger btn-xs border-0 p-0 text-danger rounded-0 w-100 h-100" @click="removeRow(index)" title="Remove Row">
                       ✕
                     </button>
                   </td>
@@ -155,7 +212,7 @@ const emit = defineEmits(['saved', 'cancelEdit']);
 
 const cachedMachineTypes = ref([]);
 const cachedItems = ref([]);
-let currentOpCodeNum = 1001;
+const inputElements = ref([]);
 
 const form = reactive({
   itemName: '',
@@ -193,15 +250,12 @@ function populateEditData(data) {
     operations.value = data.operations.map(op => {
       const smvVal = parseFloat(op.SMV || op.smv || 0);
       return {
-        OpCode: op.OpCode || op.opCode || op['Op Code'] || getNextOpCode(),
+        OpCode: op.OpCode || op.opCode || op['Op Code'] || '',
         MachineType: op.MachineType || op.machineType || op['Machine Type'] || '',
         MachineTools: op.MachineTools || op.machineTools || op['Machine Tools'] || '',
-        ProcessDescription: op.ProcessDescription || op.processDesc || op['Process Description'] || '',
+        ProcessDescription: (op.ProcessDescription || op.processDesc || op['Process Description'] || '').toUpperCase(),
         OperationGrade: op.OperationGrade || op.operationGrade || op['Operation Grade'] || '',
-        
-        // Comprehensive fallback for all possible seam length property names from the database
-       Seam_Length: op.Seam_Length || op.seamLength || op['Seam Length'] || op['Seam Len'] || op.seam_length || '',
-        
+        Seam_Length: op.Seam_Length || op.seamLength || op['Seam Length'] || op['Seam Len'] || op.seam_length || '',
         SeamFreq: op.SeamFreq || op.seamFreq || op['Seam Freq'] || op.Seam_Freq || '',
         SPI: op.SPI || op.spi || '',
         Skill: op.Skill || op.skill || 'Operator',
@@ -242,34 +296,49 @@ function parseMachineData(dataList) {
   return [...new Set(extracted)];
 }
 
-function getNextOpCode() {
-  const code = `OP-${currentOpCodeNum}`;
-  currentOpCodeNum++;
-  return code;
+async function NextOpCode(rowIndex = 0) {
+  const selectedItem = form.itemName ? form.itemName.trim() : '';
+  let itemId = 1;
+
+  if (selectedItem) {
+    try {
+      const itemRecords = await ItemApi.readRecords('Item'); 
+      const matchedItem = itemRecords.find(item => 
+        (item.Item_name || item.item_name || item.Item_Name || '').toUpperCase() === selectedItem.toUpperCase()
+      );
+
+      if (matchedItem) {
+        itemId = matchedItem.ID || matchedItem.id || 1;
+      }
+    } catch (error) {
+      console.error("Failed to fetch item ID dynamically from sheet:", error);
+    }
+  }
+
+  const nextNum = rowIndex + 1;
+  const paddedNum = String(nextNum).padStart(3, '0');
+
+  return `OP-${itemId}-${paddedNum}`;
 }
 
-function fetchInitialOpCodeAndBuildFirstRow() {
-  if (typeof google !== 'undefined' && google.script?.run) {
-    google.script.run
-      .withSuccessHandler((nextOpCode) => {
-        const match = nextOpCode ? nextOpCode.match(/OP-(\d+)/i) : null;
-        currentOpCodeNum = match ? parseInt(match[1], 10) : 1001;
-        if (operations.value.length === 0) addLibraryRow();
-      })
-      .withFailureHandler((err) => {
-        console.error("Failed to generate Op Code:", err);
-        currentOpCodeNum = 1001;
-        if (operations.value.length === 0) addLibraryRow();
-      })
-      .generateUniqueOpCode();
-  } else {
-    if (operations.value.length === 0) addLibraryRow();
+watch(() => form.itemName, async (newItem) => {
+  if (newItem) {
+    for (let i = 0; i < operations.value.length; i++) {
+      operations.value[i].OpCode = await NextOpCode(i);
+    }
+  }
+});
+
+async function fetchInitialOpCodeAndBuildFirstRow() {
+  if (operations.value.length === 0) {
+    await addLibraryRow();
   }
 }
 
-function addLibraryRow() {
+async function addLibraryRow() {
+  const newOpCode = await NextOpCode(operations.value.length);
   operations.value.push({
-    OpCode: getNextOpCode(),
+    OpCode: newOpCode,
     MachineType: '',
     MachineTools: '',
     ProcessDescription: '',
@@ -323,7 +392,7 @@ function removeRow(index) {
 
 async function loadSmvItems() {
   try {
-    const rawItems = typeof ItemApi.getItems === 'function' ? await ItemApi.getItems() : await ItemApi.readRecords('ItemData');
+    const rawItems = typeof ItemApi.getItems === 'function' ? await ItemApi.getItems() : await ItemApi.readRecords('Item');
     cachedItems.value = parseItemData(rawItems);
   } catch (err) {
     console.error("Failed to load items:", err);
@@ -354,7 +423,6 @@ async function handleLibraryFormSubmit() {
     return;
   }
 
-  // Filter operations using the exact capitalized keys
   const validOperations = operations.value.filter(op => op.MachineType || op.ProcessDescription || op.SMV > 0);
 
   if (validOperations.length === 0) {
@@ -373,7 +441,7 @@ async function handleLibraryFormSubmit() {
       OpCode: op.OpCode,
       MachineType: op.MachineType,
       MachineTools: op.MachineTools,
-      ProcessDescription: op.ProcessDescription,
+      ProcessDescription: op.ProcessDescription.toUpperCase(),
       OperationGrade: op.OperationGrade,
       Seam_Length: op.Seam_Length,
       SeamFreq: op.SeamFreq,
@@ -403,38 +471,126 @@ async function handleLibraryFormSubmit() {
     alert("Failed to save Operations: " + (error?.message || error));
   }
 }
+
+function setInputRef(el, rowIdx, colIdx) {
+  if (el) {
+    if (!inputElements.value[rowIdx]) {
+      inputElements.value[rowIdx] = [];
+    }
+    inputElements.value[rowIdx][colIdx] = el;
+  }
+}
+
+function handleKeyNavigation(event, rowIdx, colIdx) {
+  const key = event.key;
+  let targetRow = rowIdx;
+  let targetCol = colIdx;
+
+  if (['Tab', 'Shift', 'Control', 'Alt'].includes(key)) {
+    return;
+  }
+
+  if (key === 'Enter' || key === 'ArrowDown') {
+    event.preventDefault();
+    targetRow = rowIdx + 1;
+    targetCol = 1; 
+  } else if (key === 'ArrowUp') {
+    event.preventDefault();
+    targetRow = rowIdx - 1;
+  } else if (key === 'ArrowRight') {
+    event.preventDefault();
+    targetCol = colIdx + 1;
+  } else if (key === 'ArrowLeft') {
+    event.preventDefault();
+    targetCol = colIdx - 1;
+  } else {
+    return;
+  }
+
+  let nextElement = inputElements.value[targetRow]?.[targetCol];
+
+  while (targetCol < 10 && (!nextElement || nextElement.hasAttribute('readonly') || nextElement.disabled)) {
+    if (key === 'ArrowRight' || key === 'ArrowDown') {
+      targetCol++;
+    } else if (key === 'ArrowLeft') {
+      targetCol--;
+    } else {
+      break;
+    }
+    nextElement = inputElements.value[targetRow]?.[targetCol];
+  }
+
+  if (nextElement) {
+    nextElement.focus();
+    if (typeof nextElement.select === 'function') {
+      nextElement.select();
+    }
+  } else if ((key === 'Enter' || key === 'ArrowDown') && targetRow >= operations.value.length) {
+    addLibraryRow().then(() => {
+      setTimeout(() => {
+        const firstEditableCol = 1; 
+        if (inputElements.value[targetRow]?.[firstEditableCol]) {
+          inputElements.value[targetRow][firstEditableCol].focus();
+        }
+      }, 50);
+    });
+  }
+}
 </script>
 
 <style scoped>
-.excel-table th {
+.excel-grid {
+  border-collapse: collapse !important;
+  width: 100% !important;
+}
+
+.excel-grid th, 
+.excel-grid td {
+  padding: 0px !important;
+  margin: 0px !important;
+  height: 24px !important;
+  vertical-align: middle !important;
+  border: 1px solid #ced4da !important;
+}
+
+.excel-grid th {
   font-size: 0.65rem;
   font-weight: 600;
   background-color: #f1f3f5 !important;
   color: #495057;
-  border-bottom: 2px solid #dee2e6;
-  padding: 4px 2px;
-  white-space: nowrap;
+  text-align: center;
+  padding: 2px !important;
 }
 
-.excel-table td {
-  padding: 0px 0px;
-  vertical-align: middle;
-}
-
-.form-control-xs, .form-select-xs {
-  font-size: 0.72rem;
-  border-color: #ced4da;
+.excel-grid .form-control-xs, 
+.excel-grid .form-select-xs {
+  height: 24px !important;
+  min-height: 24px !important;
+  padding: 0 4px !important;
+  margin: 0 !important;
+  border: none !important;
   border-radius: 0 !important;
+  font-size: 0.72rem !important;
+  box-shadow: none !important;
+  background-color: transparent;
+  text-align: center;
 }
 
-.form-control-xs:focus, .form-select-xs:focus {
-  border-color: #86b7fe;
-  box-shadow: none;
+.excel-grid .form-select-xs option {
+  font-size: 0.75rem !important;
+}
+
+.excel-grid .form-control-xs:focus, 
+.excel-grid .form-select-xs:focus {
+  background-color: #fff !important;
+  outline: 2px solid #f7f8f9 !important;
+  z-index: 5;
+  position: relative;
 }
 
 .btn-xs {
   font-size: 0.7rem;
-  padding: 1px 4px;
+  padding: 0px 4px;
   border-radius: 0 !important;
 }
 </style>
