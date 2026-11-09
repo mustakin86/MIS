@@ -20,15 +20,15 @@ export const dbAPI = {
       });
 
       if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
-      
+
       const result = await response.json();
-      
+
       if (result.success === false) {
         throw new Error(result.error || 'Server returned unsuccessful response');
       }
-      
+
       // Return result.data directly as an array for consistency
-      return result.data || []; 
+      return result.data || [];
     } catch (err) {
       console.error('Fetch error:', err);
       throw new Error(err.message || 'Failed to fetch data from backend');
@@ -97,7 +97,7 @@ export const dbAPI = {
     }
   },
 
- async deleteRecord(sheetName = 'Items', recordId) {
+  async deleteRecord(sheetName = 'Items', recordId) {
     if (typeof google !== 'undefined' && google.script && google.script.run) {
       return new Promise((resolve, reject) => {
         google.script.run

@@ -3,16 +3,19 @@
     <form @submit.prevent="handleLibraryFormSubmit">
       <!-- SMV LIBRARY CARD -->
       <div class="card border-0 rounded-0 m-0 p-0 shadow-none bg-white w-100">
-        <div class="card-header bg-white py-2 px-3 border-bottom d-flex justify-content-between align-items-center rounded-0">
+        <div
+          class="card-header bg-white py-2 px-3 border-bottom d-flex justify-content-between align-items-center rounded-0">
           <h6 class="m-0 fw-bold text-dark d-flex align-items-center gap-2">
-            <i class="bi bi-journal-text text-primary"></i> 
+            <i class="bi bi-journal-text text-primary"></i>
             {{ isEditing ? 'Edit Operations Library' : 'Operations Library' }}
           </h6>
           <div class="d-flex align-items-center gap-2">
-            <button v-if="isEditing" type="button" class="btn btn-outline-secondary btn-xs px-2 py-0.5 rounded-0" @click="$emit('cancelEdit')" style="font-size: 0.7rem;">
+            <button v-if="isEditing" type="button" class="btn btn-outline-secondary btn-xs px-2 py-0.5 rounded-0"
+              @click="$emit('cancelEdit')" style="font-size: 0.7rem;">
               ← Back to List
             </button>
-            <span class="badge bg-light text-secondary border font-monospace px-2 py-0.5" style="font-size: 0.7rem;">SMV Management Module</span>
+            <span class="badge bg-light text-secondary border font-monospace px-2 py-0.5" style="font-size: 0.7rem;">SMV
+              Management Module</span>
           </div>
         </div>
 
@@ -21,18 +24,18 @@
           <div class="border border-light-subtle p-2 mb-2 bg-light rounded-0">
             <div class="row g-2 align-items-center">
               <div class="col-md-4">
-                <label for="uniqueItemSelect" class="form-label text-secondary fw-semibold mb-1" style="font-size: 0.75rem;">Item Name</label>
-                <select id="uniqueItemSelect" v-model="form.itemName" class="form-select form-select-xs shadow-none py-1 rounded-0" :disabled="isEditing">
+                <select id="uniqueItemSelect" v-model="form.itemName"
+                  class="form-select form-select-xs shadow-none py-1 rounded-0" :disabled="isEditing">
                   <option value="">-- Select Item --</option>
                   <option v-for="item in cachedItems" :key="item" :value="item">
                     {{ item }}
                   </option>
                 </select>
               </div>
-              
+
               <div class="col-md-2">
-               <span class="input-group-text" id="basic-addon1">@</span>
-                <input type="text" id="size" v-model="form.size" class="form-control form-control-xs shadow-none py-1 rounded-0" placeholder="e.g., S, M, L">
+                <input type="text" id="size" v-model="form.size"
+                  class="form-control form-control-xs shadow-none py-1 rounded-0" placeholder="e.g., S, M, L">
               </div>
             </div>
           </div>
@@ -61,21 +64,14 @@
                 <tr v-for="(row, index) in operations" :key="index">
                   <td class="text-center text-muted fw-bold p-0 m-0" style="font-size: 0.7rem;">{{ index + 1 }}</td>
                   <td class="p-0 m-0">
-                    <input 
-                      type="text" 
-                      class="form-control form-control-xs text-center bg-light font-monospace fw-semibold rounded-0 border-0" 
-                      v-model="row.OpCode" 
-                      readonly 
-                    >
+                    <input type="text"
+                      class="form-control form-control-xs text-center bg-light font-monospace fw-semibold rounded-0 border-0"
+                      v-model="row.OpCode" readonly>
                   </td>
                   <td class="p-0 m-0">
-                    <select 
-                      class="form-select form-select-xs shadow-none rounded-0 border-0" 
-                      v-model="row.MachineType"
-                      @change="handleMachineTypeChange(index)"
-                      :ref="el => setInputRef(el, index, 1)"
-                      @keydown="handleKeyNavigation($event, index, 1)"
-                    >
+                    <select class="form-select form-select-xs shadow-none rounded-0 border-0" v-model="row.MachineType"
+                      @change="handleMachineTypeChange(index)" :ref="el => setInputRef(el, index, 1)"
+                      @keydown="handleKeyNavigation($event, index, 1)">
                       <option value="">-- Select --</option>
                       <option v-for="machine in cachedMachineTypes" :key="machine" :value="machine">
                         {{ machine }}
@@ -83,88 +79,56 @@
                     </select>
                   </td>
                   <td class="p-0 m-0">
-                    <input 
-                      type="text" 
-                      class="form-control form-control-xs shadow-none rounded-0 border-0" 
-                      v-model="row.MachineTools" 
-                      placeholder="Tools"
-                      :ref="el => setInputRef(el, index, 2)"
-                      @keydown="handleKeyNavigation($event, index, 2)"
-                    >
+                    <input type="text" class="form-control form-control-xs shadow-none rounded-0 border-0"
+                      v-model="row.MachineTools" placeholder="Tools" :ref="el => setInputRef(el, index, 2)"
+                      @keydown="handleKeyNavigation($event, index, 2)">
                   </td>
                   <td class="p-0 m-0">
-                    <input 
-                      type="text" 
-                      class="form-control form-control-xs shadow-none rounded-0 border-0" 
-                      v-model="row.ProcessDescription" 
+                    <input type="text" class="form-control form-control-xs shadow-none rounded-0 border-0"
+                      v-model="row.ProcessDescription"
                       @input="row.ProcessDescription = row.ProcessDescription.toUpperCase()"
-                      placeholder="Operation / Process Name"
-                      :ref="el => setInputRef(el, index, 3)"
-                      @keydown="handleKeyNavigation($event, index, 3)"
-                    >
+                      placeholder="Operation / Process Name" :ref="el => setInputRef(el, index, 3)"
+                      @keydown="handleKeyNavigation($event, index, 3)">
                   </td>
                   <td class="p-0 m-0">
-                    <input 
-                      type="text" 
-                      class="form-control form-control-xs shadow-none text-center rounded-0 border-0" 
-                      v-model="row.OperationGrade"
-                      :ref="el => setInputRef(el, index, 4)"
-                      @keydown="handleKeyNavigation($event, index, 4)"
-                    >
+                    <input type="text" class="form-control form-control-xs shadow-none text-center rounded-0 border-0"
+                      v-model="row.OperationGrade" :ref="el => setInputRef(el, index, 4)"
+                      @keydown="handleKeyNavigation($event, index, 4)">
                   </td>
                   <td class="p-0 m-0">
-                    <input 
-                      type="text" 
-                      class="form-control form-control-xs shadow-none text-end rounded-0 border-0" 
-                      v-model="row.Seam_Length"
-                      :ref="el => setInputRef(el, index, 5)"
-                      @keydown="handleKeyNavigation($event, index, 5)"
-                    >
+                    <input type="text" class="form-control form-control-xs shadow-none text-end rounded-0 border-0"
+                      v-model="row.Seam_Length" :ref="el => setInputRef(el, index, 5)"
+                      @keydown="handleKeyNavigation($event, index, 5)">
                   </td>
                   <td class="p-0 m-0">
-                    <input 
-                      type="text" 
-                      class="form-control form-control-xs shadow-none text-end rounded-0 border-0" 
-                      v-model="row.SeamFreq"
-                      :ref="el => setInputRef(el, index, 6)"
-                      @keydown="handleKeyNavigation($event, index, 6)"
-                    >
+                    <input type="text" class="form-control form-control-xs shadow-none text-end rounded-0 border-0"
+                      v-model="row.SeamFreq" :ref="el => setInputRef(el, index, 6)"
+                      @keydown="handleKeyNavigation($event, index, 6)">
                   </td>
                   <td class="p-0 m-0">
-                    <input 
-                      type="text" 
-                      class="form-control form-control-xs shadow-none text-end rounded-0 border-0" 
-                      v-model="row.SPI"
-                      :ref="el => setInputRef(el, index, 7)"
-                      @keydown="handleKeyNavigation($event, index, 7)"
-                    >
+                    <input type="text" class="form-control form-control-xs shadow-none text-end rounded-0 border-0"
+                      v-model="row.SPI" :ref="el => setInputRef(el, index, 7)"
+                      @keydown="handleKeyNavigation($event, index, 7)">
                   </td>
-                 <td class="p-0 m-0">
-  <input 
-    type="text" 
-    class="form-control form-control-xs text-center bg-light font-monospace rounded-0 border-0 fw-bold text-uppercase" 
-    :class="row.Skill === 'Helper' ? 'text-danger' : 'text-primary'"
-    v-model="row.Skill" 
-    readonly 
-  >
-</td>
                   <td class="p-0 m-0">
-                    <input 
-                      type="number" 
-                      step="0.001" 
-                      min="0" 
-                      class="form-control form-control-xs shadow-none font-monospace rounded-0 border-0" 
-                      v-model.number="row.SMV"
-                      @input="calculateTarget(row)"
-                      :ref="el => setInputRef(el, index, 9)"
-                      @keydown="handleKeyNavigation($event, index, 9)"
-                    >
+                    <input type="text"
+                      class="form-control form-control-xs text-center bg-light font-monospace rounded-0 border-0 fw-bold text-uppercase"
+                      :class="row.Skill === 'Helper' ? 'text-danger' : 'text-primary'" v-model="row.Skill" readonly>
                   </td>
-                  <td class="text-center fw-bold font-monospace bg-light text-success p-0 m-0" style="font-size: 0.75rem;">
+                  <td class="p-0 m-0">
+                    <input type="number" step="0.001" min="0"
+                      class="form-control form-control-xs shadow-none font-monospace rounded-0 border-0"
+                      v-model.number="row.SMV" @input="calculateTarget(row)" :ref="el => setInputRef(el, index, 9)"
+                      @keydown="handleKeyNavigation($event, index, 9)">
+                  </td>
+                  <td class="text-center fw-bold font-monospace bg-light text-success p-0 m-0"
+                    style="font-size: 0.75rem;">
                     {{ row.Target }}
                   </td>
                   <td class="text-center p-0 m-0">
-                    <button type="button" class="btn btn-outline-danger btn-xs border-0 p-0 text-danger rounded-0 w-100 h-100" @click="removeRow(index)" title="Remove Row">
+                    <button type="button"
+                      class="btn btn-outline-danger btn-xs border-0 p-0 text-danger rounded-0 w-100 h-100"
+                      @click="removeRow(index)" title="Remove Row">
                       ✕
                     </button>
                   </td>
@@ -176,15 +140,18 @@
           <!-- Bottom Action Group -->
           <div class="d-flex justify-content-between align-items-center mt-2 px-0">
             <div class="d-flex gap-2">
-              <button type="button" class="btn btn-outline-secondary btn-xs px-3 py-1 rounded-0" @click="addLibraryRow" style="font-size: 0.75rem;">
+              <button type="button" class="btn btn-outline-secondary btn-xs px-3 py-1 rounded-0" @click="addLibraryRow"
+                style="font-size: 0.75rem;">
                 + Add Row
               </button>
             </div>
             <div class="d-flex gap-2">
-              <button v-if="isEditing" type="button" class="btn btn-outline-secondary btn-xs px-3 py-1 rounded-0" @click="$emit('cancelEdit')" style="font-size: 0.75rem;">
+              <button v-if="isEditing" type="button" class="btn btn-outline-secondary btn-xs px-3 py-1 rounded-0"
+                @click="$emit('cancelEdit')" style="font-size: 0.75rem;">
                 Cancel
               </button>
-              <button type="submit" class="btn btn-primary btn-xs px-3 py-1 fw-bold rounded-0" id="btn-save-smv" style="font-size: 0.75rem;">
+              <button type="submit" class="btn btn-primary btn-xs px-3 py-1 fw-bold rounded-0" id="btn-save-smv"
+                style="font-size: 0.75rem;">
                 {{ isEditing ? 'Update Operations' : 'Save Operations' }}
               </button>
             </div>
@@ -197,7 +164,7 @@
 
 <script setup>
 import { ref, reactive, onMounted, watch } from 'vue';
-import { dbAPI as smvAPI } from '@/services/operations_api.js'; 
+import { dbAPI as smvAPI } from '@/services/operations_api.js';
 import { dbAPI as ItemApi } from '@/services/item_api.js';
 import { dbAPI as MachineApi } from '@/services/machine_api.js';
 
@@ -225,7 +192,7 @@ const isEditing = ref(false);
 onMounted(() => {
   loadSmvItems();
   loadMachineTypes();
-  
+
   if (props.editData) {
     populateEditData(props.editData);
   } else {
@@ -302,8 +269,8 @@ async function NextOpCode(rowIndex = 0) {
 
   if (selectedItem) {
     try {
-      const itemRecords = await ItemApi.readRecords('Item'); 
-      const matchedItem = itemRecords.find(item => 
+      const itemRecords = await ItemApi.readRecords('Item');
+      const matchedItem = itemRecords.find(item =>
         (item.Item_name || item.item_name || item.Item_Name || '').toUpperCase() === selectedItem.toUpperCase()
       );
 
@@ -318,7 +285,7 @@ async function NextOpCode(rowIndex = 0) {
   const nextNum = rowIndex + 1;
   const paddedNum = String(nextNum).padStart(3, '0');
 
-  return `OP-${itemId}-${paddedNum}`;
+  return `OP-${itemId}${paddedNum}`;
 }
 
 watch(() => form.itemName, async (newItem) => {
@@ -480,6 +447,40 @@ function setInputRef(el, rowIdx, colIdx) {
     inputElements.value[rowIdx][colIdx] = el;
   }
 }
+const relativeOperations = [];
+const seenOperations = new Set(); // To track unique entries
+
+if (Array.isArray(rawData)) {
+  rawData.forEach(item => {
+    const currentItemName = String(item['Item_Name'] || item['Item Name'] || item.itemName || '').trim();
+
+    if (currentItemName.toLowerCase() === row.itemName.toLowerCase()) {
+      const opCode = item['OpCode'] || item['Op Code'] || item.opCode || '';
+      const processDesc = item['ProcessDescription'] || item['Process Description'] || item.processDesc || '';
+
+      // Create a unique composite key (e.g., using Op Code)
+      const uniqueKey = `${opCode}-${processDesc}`.toLowerCase();
+
+      // Only push if this operation hasn't been added yet
+      if (!seenOperations.has(uniqueKey)) {
+        seenOperations.add(uniqueKey);
+
+        relativeOperations.push({
+          opCode: opCode || `OP-${1001 + relativeOperations.length}`,
+          machineType: item['MachineType'] || item['Machine Type'] || item.machineType || '',
+          machineTools: item['MachineTools'] || item['Machine Tools'] || item.machineTools || '',
+          processDesc: processDesc,
+          operationGrade: item['OperationGrade'] || item['Operation Grade'] || item.operationGrade || '',
+          seamLength: item['SeamLength'] || item['Seam Length'] || item.seamLength || '',
+          seamFreq: item['SeamFreq'] || item['Seam Freq'] || item.seamFreq || '',
+          spi: item['SPI'] || item.spi || '',
+          skill: item['Skill'] || item.skill || 'Operator',
+          smv: parseFloat(item['SMV'] || item.smv || 0)
+        });
+      }
+    }
+  });
+}
 
 function handleKeyNavigation(event, rowIdx, colIdx) {
   const key = event.key;
@@ -493,7 +494,7 @@ function handleKeyNavigation(event, rowIdx, colIdx) {
   if (key === 'Enter' || key === 'ArrowDown') {
     event.preventDefault();
     targetRow = rowIdx + 1;
-    targetCol = 1; 
+    targetCol = 1;
   } else if (key === 'ArrowUp') {
     event.preventDefault();
     targetRow = rowIdx - 1;
@@ -528,7 +529,7 @@ function handleKeyNavigation(event, rowIdx, colIdx) {
   } else if ((key === 'Enter' || key === 'ArrowDown') && targetRow >= operations.value.length) {
     addLibraryRow().then(() => {
       setTimeout(() => {
-        const firstEditableCol = 1; 
+        const firstEditableCol = 1;
         if (inputElements.value[targetRow]?.[firstEditableCol]) {
           inputElements.value[targetRow][firstEditableCol].focus();
         }
@@ -544,7 +545,7 @@ function handleKeyNavigation(event, rowIdx, colIdx) {
   width: 100% !important;
 }
 
-.excel-grid th, 
+.excel-grid th,
 .excel-grid td {
   padding: 0px !important;
   margin: 0px !important;
@@ -562,7 +563,7 @@ function handleKeyNavigation(event, rowIdx, colIdx) {
   padding: 2px !important;
 }
 
-.excel-grid .form-control-xs, 
+.excel-grid .form-control-xs,
 .excel-grid .form-select-xs {
   height: 24px !important;
   min-height: 24px !important;
@@ -580,7 +581,7 @@ function handleKeyNavigation(event, rowIdx, colIdx) {
   font-size: 0.75rem !important;
 }
 
-.excel-grid .form-control-xs:focus, 
+.excel-grid .form-control-xs:focus,
 .excel-grid .form-select-xs:focus {
   background-color: #fff !important;
   outline: 2px solid #f7f8f9 !important;

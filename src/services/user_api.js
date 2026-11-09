@@ -1,6 +1,5 @@
 // src/services/api.js
 
-import { DEPLOYED_URL } from '@/config.js';
 
 export const dbAPI = {
   // Read Users (GET: users.index)
@@ -21,10 +20,10 @@ export const dbAPI = {
       });
 
       if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
-      
+
       const result = await response.json();
       if (result.status !== 'success') throw new Error(result.message || 'Failed to fetch data');
-      
+
       return result.data; // Returns array of users
     } catch (err) {
       console.error('Fetch error:', err);
@@ -77,10 +76,10 @@ export const dbAPI = {
       const response = await fetch(DEPLOYED_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ 
-          action: 'users.update', 
+        body: JSON.stringify({
+          action: 'users.update',
           sheetName,
-          user: { ID: recordId, ...recordData } 
+          user: { ID: recordId, ...recordData }
         }),
         redirect: 'follow'
       });

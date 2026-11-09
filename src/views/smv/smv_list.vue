@@ -1,40 +1,42 @@
 <template>
-  <div class="container my-1">
-    <div class="mb-1 row">
-      <h2 class="mb-4">SMV LIST</h2>
-      <label for="search" class="col-sm-1 col-form-label">Search:</label>
-      <div class="col-sm-4">
-        <input 
-          id="search" 
-          type="text" 
-          v-model="searchQuery" 
-          class="form-control form-control-sm" 
-          placeholder="Search items..."
-        />
+  <div class="container-fluid m-0 p-0">
+    <!-- Header & Search Controls -->
+    <div class="row align-items-center m-0 mb-2 p-0">
+      <div class="col-auto ps-0">
+        <h4 class="fw-bold m-0 p-0 text-secondary">SMV LIST</h4>
+      </div>
+      <div class="col-md-4 ms-auto pe-0">
+        <div class="input-group input-group-sm m-0 p-0">
+          <span class="input-group-text bg-white text-muted rounded-0 border-end-0">Search</span>
+          <input id="search" type="text" v-model="searchQuery" class="form-control rounded-0" placeholder="Search items..." />
+        </div>
       </div>
     </div>
 
-    <div class="table-responsive border rounded" style="max-height: 350px; overflow-y: auto;">
-      <table class="table table-striped table-hover mb-0 align-middle">
-        <thead class="table-light sticky-top">
+    <!-- Excel-Style Responsive Table Container -->
+    <div class="table-responsive m-0 p-0 border shadow-sm bg-white excel-container" style="max-height: 75vh;">
+      <table class="table table-bordered table-striped table-hover align-middle m-0 p-0 excel-grid">
+        <thead class="table-light text-uppercase text-secondary sticky-top m-0 p-0">
           <tr>
-            <th @click="sort('id')" role="button" style="width: 100px;">ID ↕</th>
-            <th @click="sort('itemName')" role="button">Item Name ↕</th>
+            <th style="width: 50px;" class="text-center bg-light border-end m-0 p-1">SL</th>
+            <th class="m-0 p-1">Item Name</th>
           </tr>
         </thead>
         <tbody>
-          <tr 
-            v-for="row in filteredAndSortedRows" 
-            :key="row.id" 
-            @click="handleRowClick(row)" 
-            role="button" 
-            style="cursor: pointer;"
-          >
-            <td>{{ row.id }}</td>
-            <td>{{ row.itemName }}</td>
-          </tr>
           <tr v-if="filteredAndSortedRows.length === 0">
-            <td colspan="2" class="text-center py-3 text-muted">No matching records found</td>
+            <td colspan="2" class="text-center text-muted py-4 m-0">No items found</td>
+          </tr>
+          <tr v-for="(row, index) in filteredAndSortedRows" :key="row.id" @click="handleRowClick(row)" role="button"
+            class="excel-row m-0 p-0">
+            <td class="text-center text-muted fw-semibold border-end m-0 p-1" style="font-size: 0.75rem;">
+              {{ index + 1 }}
+            </td>
+            <td class="m-0 p-1">
+              <!-- Hyperlink styled text input mimicking an active sheet link -->
+              <input type="text"
+                class="form-control form-control-sm bg-transparent font-monospace fw-semibold rounded-0 border-0 shadow-none excel-link-text"
+                v-model="row.itemName" readonly style="cursor: pointer;" />
+            </td>
           </tr>
         </tbody>
       </table>
@@ -45,13 +47,13 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
-import { dbAPI as smvAPI } from '@/services/operations_api.js'; 
+import { dbAPI as smvAPI } from '@/services/operations_api.js';
 
 const router = useRouter();
 const emit = defineEmits(['edit-item']);
 
 const searchQuery = ref('');
-const sortColumn = ref('');
+const sortColumn = ref('itemName'); // Default sorted column
 const sortDirection = ref('asc');
 const rows = ref([]);
 
@@ -59,7 +61,7 @@ const fetchItems = async () => {
   try {
     const response = await smvAPI.readRecords('Operations');
     const rawData = response.items || response.data || response;
-    
+
     const uniqueItemsMap = {};
 
     if (Array.isArray(rawData)) {
@@ -85,52 +87,12 @@ const fetchItems = async () => {
 
 onMounted(fetchItems);
 
-const handleRowClick = async (row) => {
-  try {
-    console.log("Navigating/fetching operations for:", row.itemName);
-    
-    // Option A: If using Vue Router navigation:
-    router.push({ 
-      name: 'EditSMV', // Ensure this matches your router/index.js route name
-      params: { itemName: row.itemName } 
-    });
-
-    // Option B: If you prefer keeping event emission alongside router push:
-    const response = await smvAPI.readRecords('Operations'); 
-    const rawData = response.items || response.data || response;
-
-    const relativeOperations = [];
-    if (Array.isArray(rawData)) {
-      rawData.forEach(item => {
-        const currentItemName = String(item['Item_Name'] || item['Item Name'] || item.itemName || '').trim();
-        if (currentItemName.toLowerCase() === row.itemName.toLowerCase()) {
-          relativeOperations.push({
-            opCode: item['OpCode'] || item['Op Code'] || item.opCode || `OP-${1001 + relativeOperations.length}`,
-            machineType: item['MachineType'] || item['Machine Type'] || item.machineType || '',
-            machineTools: item['MachineTools'] || item['Machine Tools'] || item.machineTools || '',
-            processDesc: item['ProcessDescription'] || item['Process Description'] || item.processDesc || '',
-            operationGrade: item['OperationGrade'] || item['Operation Grade'] || item.operationGrade || '',
-            seamLength: item['SeamLength'] || item['Seam Length'] || item.seamLength || '',
-            seamFreq: item['SeamFreq'] || item['Seam Freq'] || item.seamFreq || '',
-            spi: item['SPI'] || item.spi || '',
-            skill: item['Skill'] || item.skill || 'Operator',
-            smv: parseFloat(item['SMV'] || item.smv || 0)
-          });
-        }
-      });
-    }
-
-    const payload = {
-      ...row,
-      operations: relativeOperations
-    };
-
-    emit('edit-item', payload);
-
-  } catch (error) {
-    console.error("Failed to fetch relative data for item:", error);
-    emit('edit-item', { ...row, operations: [] });
-  }
+const handleRowClick = (row) => {
+  console.log("Navigating for:", row.itemName);
+  router.push({
+    name: 'EditSMV',
+    params: { itemName: row.itemName }
+  });
 };
 
 const sort = (column) => {
@@ -143,7 +105,7 @@ const sort = (column) => {
 };
 
 const filteredAndSortedRows = computed(() => {
-  let result = rows.value.filter(row => 
+  let result = rows.value.filter(row =>
     Object.values(row).some(val => String(val).toLowerCase().includes(searchQuery.value.toLowerCase()))
   );
 
@@ -160,9 +122,40 @@ const filteredAndSortedRows = computed(() => {
 </script>
 
 <style scoped>
-thead.sticky-top {
+/* Excel Grid UI Enhancements with 0 Margin & Padding */
+.container-fluid, .row, .table, th, td {
+  margin: 0 !important;
+}
+
+.excel-container {
+  overflow-y: auto;
+  border-radius: 0px;
+}
+
+.excel-grid th,
+.excel-grid td {
+  border-color: #d0d7de !important;
+  vertical-align: middle;
+}
+
+.excel-grid thead.sticky-top {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: 2;
+}
+
+/* Hyperlink styling for table cells matching spreadsheet blue links */
+.excel-link-text {
+  color: #0d6efd !important;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.excel-link-text:hover {
+  color: #0a58ca !important;
+}
+
+.excel-row:hover input {
+  background-color: rgba(13, 110, 253, 0.06) !important;
 }
 </style>
