@@ -71,6 +71,11 @@ const routes = [
         path: '/add_lbs',
         name: 'AddLbs',
         component: () => import('@/views/lbs/add_lbs.vue')
+      },
+      {
+        path: '/npt_by_qr_code',
+        name: 'NptByQrCode',
+        component: () => import('@/views/Qrcode/npt_by_qr_code.vue')
       }
     ]
   }
