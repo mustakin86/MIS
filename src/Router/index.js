@@ -73,9 +73,19 @@ const routes = [
         component: () => import('@/views/lbs/add_lbs.vue')
       },
       {
-        path: '/npt_Qr_code',
-        name: 'NptQrCode',
-        component: () => import('@/views/npt_QR_code/npt_Qr_code.vue')
+        path: '/npt_by_qr_code',
+        name: 'NPTByQRCode',
+        component: () => import('@/views/npt_QR_code/npt_by_qr_code.vue')
+      },
+      {
+        path: '/add_problem',
+        name: 'AddProblem',
+        component: () => import('@/views/npt_QR_code/add_problem.vue')
+      },
+      {
+        path: '/addMachine',
+        name: 'AddMachine',
+        component: () => import('@/views/npt_QR_code/addMachine.vue')
       }
     ]
   }

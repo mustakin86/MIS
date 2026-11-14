@@ -174,11 +174,18 @@
           <div class="collapse ms-3 border-start ps-2 my-1" id="npt">
             <ul class="nav nav-pills flex-column gap-1">
               <li>
-                <RouterLink to="/npt_Qr_code" class="nav-link py-1 fs-7">Add N.P.T </RouterLink>
+                <RouterLink to="/npt_by_qr_code" class="nav-link py-1 fs-7">NPT </RouterLink>
+              </li>
+              <li>
+                <RouterLink to="/add_problem" class="nav-link py-1 fs-7">Add Problem</RouterLink>
+              </li>
+              <li>
+                <RouterLink to="/addMachine" class="nav-link py-1 fs-7">Add Machine</RouterLink>
               </li>
             </ul>
           </div>
         </li>
+
         <!-- Operations Dropdown -->
         <li class="nav-item">
           <a href="#smvCollapse" class="nav-link dropdown-toggle collapsed" data-bs-toggle="collapse" role="button"
