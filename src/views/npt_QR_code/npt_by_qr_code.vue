@@ -1,54 +1,175 @@
 <template>
   <div class="dashboard-container">
     <!-- Header Controls -->
-    <header class="table-header">
-      <h2>Daily NPT Records</h2>
-      <div class="actions">
-        <input v-model="searchQuery" type="text" placeholder="Search records..." class="search-input" />
-        <button class="btn btn-secondary" @click="openScanModal">📷 Scan QR Code</button>
+    <header class="dashboard-top-header">
+      <!-- Left: Active Device Badge -->
+      <div class="top-left-device-badge">
+        <span class="device-dot"></span> 
+        <button type="button" class="left-device-badge" @click.prevent="openScanModal">
+          Scan QR Code
+        </button>
+      </div>
+      
+      <!-- Right: Combined Device Filter Badge & Scan Button -->
+      <div class="header-right-toolbar">
+        <button 
+          type="button" 
+          class="top-left-device-badge filter-clickable-badge" 
+          :class="{ inactive: !filterByCurrentDevice }" 
+          @click="filterByCurrentDevice = !filterByCurrentDevice"
+          title="Click to toggle device filter"
+        >
+          <span class="device-dot" :class="{ 'dot-inactive': !filterByCurrentDevice }"></span> 
+          Active Device: <strong>{{ operatorName }}</strong>
+          <span class="filter-status-text">({{ filterByCurrentDevice ? 'Filtered' : 'All Devices' }})</span>
+        </button>
       </div>
     </header>
 
-    <!-- Data Table -->
-    <div class="table-wrapper">
-      <table>
-        <thead>
-          <tr>
-            <th v-for="header in HEADERS" :key="header">
-              {{ formatHeader(header) }}
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-if="filteredRecords.length === 0">
-            <td :colspan="HEADERS.length" class="no-data">No records found</td>
-          </tr>
-          <tr v-for="record in filteredRecords" :key="record.ID">
-            <td v-for="header in HEADERS" :key="header">
-              <span v-if="header === 'QRcode'" class="badge badge-code">{{ record[header] }}</span>
-              <span v-else-if="header === 'Type_of_Problem'" class="badge badge-problem">{{ record[header] }}</span>
-              <span v-else-if="header === 'TTL_Time'" class="badge badge-ttl">{{ calculateTTL(record.Start_time,
-                record.End_Time) }}</span>
-              <span v-else>{{ record[header] }}</span>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+    <!-- Tab Navigation -->
+    <div class="tabs-container">
+      <button 
+        type="button" 
+        class="tab-btn" 
+        :class="{ active: activeTab === 'records' }" 
+        @click="activeTab = 'records'"
+      >Daily NPT Records
+      </button>
+      <button 
+        type="button" 
+        class="tab-btn" 
+        :class="{ active: activeTab === 'summary' }" 
+        @click="activeTab = 'summary'"
+      >Summary Report
+      </button>
+    </div>
+
+    <!-- Excel Sheet 1: Daily NPT Records (Today's Data Only) -->
+    <div v-if="activeTab === 'records'" class="records-tab-content">
+      <div class="excel-sheet-wrapper" style="margin-top: 0.5rem;">
+        <table class="excel-table">
+          <thead>
+            <tr>
+              <th class="row-index-header">#</th>
+              <th v-for="header in HEADERS" :key="header" class="excel-cell-header">{{ formatHeader(header) }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(record, index) in filteredRecords" :key="record.ID || index" class="excel-row">
+              <td class="row-index-cell">{{ index + 1 }}</td>
+              <td v-for="header in HEADERS" :key="header" class="excel-cell">
+                <span v-if="header === 'QRcode'" class="badge badge-code">{{ record[header] }}</span>
+                <span v-else-if="header === 'Type_of_Problem'" class="badge badge-problem">{{ record[header] }}</span>
+                <span v-else-if="header === 'Ttl_Time'" class="badge badge-ttl">{{ record[header] }}</span>
+                <span v-else-if="header === 'Status'" :class="getStatusBadgeClass(record[header])">
+                  {{ record[header] || '-' }}
+                </span>
+                <span v-else>{{ record[header] !== undefined && record[header] !== '' ? record[header] : '-' }}</span>
+              </td>
+            </tr>
+            <tr v-if="filteredRecords.length === 0">
+              <td :colspan="HEADERS.length + 1" class="no-data">No records found for today. Click "Scan QR Code" to log an issue.</td>
+            </tr>
+          </tbody>
+          <!-- Grand Total Footer Row -->
+          <tfoot v-if="filteredRecords.length > 0">
+            <tr class="excel-row grand-total-row">
+              <td class="row-index-header font-bold">Σ</td>
+              <td :colspan="HEADERS.indexOf('Ttl_Time')" class="excel-cell text-right font-bold">Grand Total Lost Time:</td>
+              <td class="excel-cell font-bold badge-ttl-total">{{ grandTotalTtlTime }} mins</td>
+              <td :colspan="HEADERS.length - HEADERS.indexOf('Ttl_Time') - 1" class="excel-cell"></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      <!-- Side-by-Side Bar Charts Section Below Daily Table -->
+      <div class="charts-row" v-if="filteredRecords.length > 0">
+        <div class="chart-col">
+          <div class="chart-container-wrapper">
+            <div class="chart-header-title">Problem Category Wise (Minutes vs Taka)</div>
+            <div class="chart-canvas-box">
+              <Bar :data="problemBarChartData" :options="barChartOptions" />
+            </div>
+          </div>
+        </div>
+        <div class="chart-col">
+          <div class="chart-container-wrapper">
+            <div class="chart-header-title">Responsible Department Wise (Minutes vs Taka)</div>
+            <div class="chart-canvas-box">
+              <Bar :data="departmentBarChartData" :options="barChartOptions" />
+            </div>
+          </div>
+        </div>
+        <div class="chart-col">
+          <div class="chart-container-wrapper">
+            <div class="chart-header-title">Line Wise (Minutes vs Taka)</div>
+            <div class="chart-canvas-box">
+              <Bar :data="lineBarChartData" :options="barChartOptions" />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Excel Sheet 2: Summary Report -->
+    <div v-if="activeTab === 'summary'" class="summary-tab-content">
+      <div class="excel-sheet-wrapper" style="margin-top: 0.5rem;">
+
+        <!-- Monthly Problem Multi-Line Trend Chart Section (Lost Minutes) -->
+        <div class="charts-row" style="margin-top: 16px;" v-if="records.length > 0">    
+          <div class="chart-col" style="flex: 1; min-width: 320px;">
+            <div class="chart-container-wrapper">
+              <div class="chart-header-title">Monthly Problem vs Lost Minutes (Multi-Month Line Comparison)</div>
+              <div class="chart-canvas-box" style="height: 280px;">
+                <Line :data="monthlyMultiLineMinutesChartData" :options="lineChartMinutesOptions" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Monthly Problem Multi-Line Trend Chart Section (Lost Taka) -->
+        <div class="charts-row" style="margin-top: 16px;" v-if="records.length > 0">    
+          <div class="chart-col" style="flex: 1; min-width: 320px;">
+            <div class="chart-container-wrapper">
+              <div class="chart-header-title">Monthly Problem vs Lost Taka (Multi-Month Line Comparison)</div>
+              <div class="chart-canvas-box" style="height: 280px;">
+                <Line :data="monthlyMultiLineTakaChartData" :options="lineChartTakaOptions" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Monthly Problem Multi-Line Trend Chart Section (Percentage with Labels) -->
+        <div class="charts-row" style="margin-top: 16px;" v-if="records.length > 0">    
+          <div class="chart-col" style="flex: 1; min-width: 320px;">
+            <div class="chart-container-wrapper">
+              <div class="chart-header-title">Monthly Problem vs Percentage (Multi-Month Line Comparison)</div>
+              <div class="chart-canvas-box" style="height: 280px;">
+                <Line :data="monthlyMultiLinePercentageChartData" :options="lineChartPercentageOptions" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Mobile QR Camera Scanner Modal -->
     <div v-if="showScanModal" class="modal-overlay" @click.self="closeScanModal">
-      <div class="modal-content scanner-modal">
-        <button type="button" class="btn-close-absolute" @click="closeScanModal">&times;</button>
+      <div class="modal-content scanner-modal" @click.stop>
+        <button type="button" class="btn-close-absolute" @click.prevent="closeScanModal">&times;</button>
+        
+        <div class="pipup-device-badge modal-corner-badge">
+          <span class="device-dot"></span> Active Device: <strong>{{ operatorName }}</strong>
+        </div>
 
-        <h3>Select Problem & Scan QR</h3>
-        <p class="scanner-desc">First, choose the problem type. Once selected, click "Proceed to Camera Scan" to
-          activate your camera.</p>
+        <h3>Scan QR Code</h3>
+        <p class="scanner-desc">Follow the steps below to record start or end time.</p>
 
-        <!-- Dynamic Problem Category Dropdown -->
+        <!-- Step 1: Type of Problem -->
         <div class="form-group">
           <label for="problemType">Type of Problem:</label>
-          <select id="problemType" v-model="selectedProblemType" class="form-control">
+          <select id="problemType" v-model="selectedProblemType" @change="onProblemChange" class="form-control">
             <option disabled value="">Select problem category...</option>
             <option v-for="category in problemCategories" :key="category" :value="category">
               {{ category }}
@@ -56,28 +177,58 @@
           </select>
         </div>
 
-        <div class="form-group" v-if="!cameraActive">
+        <!-- Step 2: Line No (Appears after Type of Problem is selected) -->
+        <div class="form-group" v-if="selectedProblemType">
+          <label for="lineNo">Line No:</label>
+          <select id="lineNo" v-model="selectedLineNo" @change="onLineChange" class="form-control">
+            <option disabled value="">Select line number...</option>
+            <option v-for="line in lineOptions" :key="line.ID || line.Line_No" :value="line.Line_No">
+             {{ line.Line_No }}
+            </option>
+          </select>
+        </div>
+
+        <!-- Step 3: Time Action (Appears after Line No is selected) -->
+        <div class="form-group" v-if="selectedLineNo">
+          <label for="timeAction">Time Action:</label>
+          <select id="timeAction" v-model="selectedTimeRange" @change="onTimeActionChange" class="form-control">
+            <option disabled value="">Select time action...</option>
+            <option value="start">Start Time</option>
+            <option value="end">End Time</option>
+          </select>
+        </div>
+
+        <!-- Step 4: Effective Manpower (Appears only if Time Action is 'end') -->
+        <div class="form-group" v-if="selectedTimeRange === 'end' && !cameraActive">
           <label for="manpowerInput">Effective Manpower:</label>
           <input id="manpowerInput" v-model.number="effectiveManpower" type="number" min="1" class="select-input"
             placeholder="e.g. 1" />
         </div>
 
-        <button v-if="!cameraActive" type="button" class="btn btn-primary" style="margin-top: 1rem; width: 100%;"
-          @click="startCamera">
+        <button v-if="selectedTimeRange && !cameraActive" type="button" class="btn btn-primary" style="margin-top: 0.5rem; width: 100%;"
+          @click.prevent="startCamera">
           Proceed to Camera Scan
         </button>
 
         <!-- Camera Stream Component -->
         <div v-if="cameraActive">
-          <p class="active-problem-badge">Active Problem: <strong>{{ selectedProblemType }}</strong></p>
           <div class="camera-container">
-            <qrcode-stream camera="auto" @decode="processScan" @detect="onCameraDetect" @error="onCameraError">
-              <div v-if="loadingCamera" class="camera-loading">Loading camera...</div>
+            <qrcode-stream 
+              :constraints="{ facingMode: 'environment' }" 
+              @detect="onDetect"
+              @error="onCameraError"
+            >
+              <div class="scanner-overlay-ui">
+                <div class="viewfinder-box">
+                  <div class="laser-line"></div>
+                </div>
+                <div class="scanner-instruction">Place the code inside the frame</div>
+              </div>
             </qrcode-stream>
           </div>
-          <button type="button" class="btn btn-secondary" style="width: 100%; margin-bottom: 1rem;"
-            @click="cameraActive = false">
-            Change Problem Type
+          <button type="button" class="btn btn-secondary" style="width: 100%; margin-bottom: 0.5rem;"
+            @click.prevent="cameraActive = false">
+            Change Options
           </button>
         </div>
 
@@ -90,44 +241,70 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue';
 import { QrcodeStream } from 'vue-qrcode-reader';
+import { Chart as ChartJS, Title, Tooltip, Legend, BarElement, LineElement, PointElement, CategoryScale, LinearScale } from 'chart.js';
+import ChartDataLabels from 'chartjs-plugin-datalabels';
+import { Bar, Line } from 'vue-chartjs';
 import { dbAPI } from '@/services/npr_qr_code_api.js';
+import { dbAPI as Unit_line_API } from '@/services/unit_line_api.js';
 
-const HEADERS = ['ID', 'QRcode', 'Type_of_Problem', 'No_of_Effective_Man', 'Start_time', 'End_Time', 'Ttl_Time', 'Remarks', 'Created_Date'];
+ChartJS.register(Title, Tooltip, Legend, BarElement, LineElement, PointElement, CategoryScale, LinearScale, ChartDataLabels);
+
 const SHEET_NAME = 'DailyNPTrecord';
+const SUMMARY_SHEET_NAME = 'SummaryReport';
 
+const HEADERS = [ 'Line_No', 'QRcode', 'Type_of_Problem', 'No_of_Effective_Man', 'Start_time', 'End_Time', 'Duration_time', 'Ttl_Time', 'Device_Name', 'Status'];
+const SUMMARY_HEADERS = [ 'Type_of_Problem', 'Ttl_Minuts', 'Ttl_loss(taka)'];
+
+const activeTab = ref('records');
 const searchQuery = ref('');
+const filterByCurrentDevice = ref(true);
 const showScanModal = ref(false);
 const cameraActive = ref(false);
-const loadingCamera = ref(false);
 const cameraError = ref('');
+const isProcessing = ref(false);
 
 const problemCategories = ref([]);
+const lineOptions = ref([]);
 const selectedProblemType = ref('');
-const effectiveManpower = ref(1);
+const selectedLineNo = ref('');
+const selectedTimeRange = ref(''); 
+const effectiveManpower = ref('');
 
-const records = ref([]);
-
-const fetchProblemCategories = async () => {
-  try {
-    const data = await dbAPI.getProblemCategories();
-    problemCategories.value = data?.categories || [];
-  } catch (error) {
-    console.error('Failed to fetch problem categories:', error);
-    problemCategories.value = ['Machine Problem', 'Material Shortage', 'Quality Issue', 'Power Outage', 'Waiting for Work'];
-  }
+// Helper to get today's date automatically in YYYY-MM-DD format
+const getCurrentYYYYMMDD = () => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 };
 
-onMounted(async () => {
-  try {
-    const fetchedData = await dbAPI.getRecords(SHEET_NAME);
-    if (fetchedData && fetchedData.length > 0) {
-      records.value = fetchedData.reverse();
-    }
-  } catch (error) {
-    console.error('Failed to load records:', error);
-  }
-  await fetchProblemCategories();
-});
+// Fixed today's date constant for filtering records automatically
+const todayDateStr = getCurrentYYYYMMDD();
+
+// CPM Constants ($25/day mapped to BDT at 120 BDT/$ over a 10-hour/600-min shift = 5 BDT/min)
+const DAILY_MACHINE_COST = 25; 
+const DOLLAR_RATE = 120; 
+const DAILY_WORKING_MINUTES = 600; 
+const costPerMinute = DAILY_MACHINE_COST / DAILY_WORKING_MINUTES;
+const costPerMinute_TAKA = costPerMinute * DOLLAR_RATE;
+
+const getMobileBrandName = () => {
+  const ua = navigator.userAgent;
+  if (/iphone/i.test(ua)) return "Apple iPhone";
+  if (/ipad/i.test(ua)) return "Apple iPad";
+  if (/samsung/i.test(ua) || /sm-/i.test(ua)) return "Samsung Device";
+  if (/pixel/i.test(ua)) return "Google Pixel";
+  if (/xiaomi|redmi/i.test(ua)) return "Xiaomi Device";
+  if (/oppo/i.test(ua)) return "Oppo Device";
+  if (/vivo/i.test(ua)) return "Vivo Device";
+  if (/huawei/i.test(ua)) return "Huawei Device";
+  if (/android/i.test(ua)) return "Android Phone";
+  if (/windows/i.test(ua)) return "Windows PC";
+  if (/mac/i.test(ua)) return "Mac";
+  return "Mobile Terminal";
+};
+
+const operatorName = ref(getMobileBrandName());
+const records = ref([]);
+const summaryRecords = ref([]);
 
 const formatDeviceTime = (date = new Date()) => {
   let hours = date.getHours();
@@ -135,46 +312,72 @@ const formatDeviceTime = (date = new Date()) => {
   const seconds = date.getSeconds();
 
   const ampm = hours >= 12 ? 'PM' : 'AM';
-  hours = hours % 12;
-  hours = hours ? 12 : hours;
+  hours = hours % 12 || 12;
 
   const pad = (n) => String(n).padStart(2, '0');
   return `${pad(hours)}:${pad(minutes)}:${pad(seconds)} ${ampm}`;
 };
 
-const calculateTTL = (start, end) => {
-  if (!start || !end || start === '-' || end === '-') return '-';
+const parseTotalSecondsFrom12h = (timeStr) => {
+  if (!timeStr || timeStr === '-') return 0;
+  const [timePart, modifier] = timeStr.split(' ');
+  let [hours, minutes, seconds] = timePart.split(':').map(Number);
 
-  const parse12HourTime = (timeStr) => {
-    const parts = timeStr.split(' ');
-    if (parts.length < 2) return 0;
-    const [time, modifier] = parts;
-    let [hours, minutes, seconds] = time.split(':').map(Number);
+  if (modifier === 'PM' && hours < 12) hours += 12;
+  if (modifier === 'AM' && hours === 12) hours = 0;
 
-    if (modifier === 'PM' && hours < 12) hours += 12;
-    if (modifier === 'AM' && hours === 12) hours = 0;
-
-    return (hours || 0) * 3600 + (minutes || 0) * 60 + (seconds || 0);
-  };
-
-  const startTotalSeconds = parse12HourTime(start);
-  const endTotalSeconds = parse12HourTime(end);
-
-  let diffSeconds = endTotalSeconds - startTotalSeconds;
-  if (diffSeconds < 0) diffSeconds += 24 * 3600;
-
-  const hours = Math.floor(diffSeconds / 3600);
-  const minutes = Math.floor((diffSeconds % 3600) / 60);
-  const seconds = diffSeconds % 60;
-
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+  return (hours * 3600) + (minutes * 60) + (seconds || 0);
 };
 
-const openScanModal = () => {
+// Fetch Unique Problem Categories dynamically from sheet
+const fetchProblemCategories = async () => {
+  try {
+    const data = await dbAPI.getRecords(SHEET_NAME);
+    if (Array.isArray(data) && data.length > 0) {
+      problemCategories.value = [...new Set(data.map(item => item.Type_of_Problem).filter(Boolean))];
+    }
+  } catch (error) {
+    console.error('Failed to fetch problem categories:', error);
+  }
+};
+
+const fetchLineNumbers = async () => {
+  try {
+    const data = await Unit_line_API.getRecords('Unit_line_No');
+    lineOptions.value = Array.isArray(data) ? data : [];
+  } catch (error) {
+    console.error('Failed to fetch line numbers:', error);
+  }
+};
+
+onMounted(async () => {
+  try {
+    const fetchedData = await dbAPI.getRecords(SHEET_NAME);
+    if (fetchedData?.length) records.value = fetchedData.reverse();
+  } catch (error) {
+    console.error('Failed to load records:', error);
+  }
+
+  try {
+    const fetchedSummary = await dbAPI.getRecords(SUMMARY_SHEET_NAME);
+    if (fetchedSummary?.length) summaryRecords.value = fetchedSummary;
+  } catch (error) {
+    console.error('Failed to load summary records:', error);
+  }
+
+  await fetchProblemCategories();
+  await fetchLineNumbers();
+});
+
+const openScanModal = async () => {
   cameraError.value = '';
   cameraActive.value = false;
+  selectedProblemType.value = '';
+  selectedLineNo.value = '';
+  selectedTimeRange.value = '';
+  effectiveManpower.value = '';
   showScanModal.value = true;
+  await fetchLineNumbers();
 };
 
 const closeScanModal = () => {
@@ -182,19 +385,32 @@ const closeScanModal = () => {
   cameraActive.value = false;
 };
 
+const onProblemChange = () => {
+  selectedLineNo.value = '';
+  selectedTimeRange.value = '';
+  effectiveManpower.value = '';
+};
+
+const onLineChange = () => {
+  selectedTimeRange.value = '';
+  effectiveManpower.value = '';
+};
+
+const onTimeActionChange = () => {
+  if (selectedTimeRange.value === 'start') {
+    effectiveManpower.value = '';
+  } else if (selectedTimeRange.value === 'end') {
+    effectiveManpower.value = 1;
+  }
+};
+
 const startCamera = () => {
-  if (!selectedProblemType.value) {
-    cameraError.value = 'Please select a problem type first.';
+  if (!selectedProblemType.value || !selectedLineNo.value || !selectedTimeRange.value) {
+    cameraError.value = 'Please complete all selections first.';
     return;
   }
   cameraError.value = '';
   cameraActive.value = true;
-};
-
-const onCameraDetect = (detectedCodes) => {
-  if (detectedCodes && detectedCodes.length > 0) {
-    processScan(detectedCodes[0].rawValue);
-  }
 };
 
 const onCameraError = (err) => {
@@ -203,175 +419,634 @@ const onCameraError = (err) => {
   else cameraError.value = `Camera error: ${err.message}`;
 };
 
+const onDetect = (detectedCodes) => {
+  if (detectedCodes?.length) processScan(detectedCodes[0].rawValue);
+};
+
 const processScan = async (scannedCode) => {
-  const code = scannedCode ? scannedCode.trim() : '';
+  if (isProcessing.value) return;
+  const code = scannedCode?.trim();
   if (!code) return;
 
+  isProcessing.value = true;
   const now = new Date();
+  cameraActive.value = false;
+  showScanModal.value = false;
 
-  // Check if there is an active, unresolved entry for this QR code
-  const activeRecord = records.value.find(
-    r => r.QRcode === code && (!r.End_Time || r.End_Time === '-' || r.End_Time === '')
-  );
-
-  if (activeRecord) {
-    // Update existing row (End Scan)
-    activeRecord.End_Time = formatDeviceTime(now);
-    activeRecord.Ttl_Time = calculateTTL(activeRecord.Start_time, activeRecord.End_Time);
-    activeRecord.Remarks = 'Resolved';
-
-    try {
-      // FIXED: Passed SHEET_NAME as the first argument
-      await dbAPI.saveRecord(SHEET_NAME, activeRecord, 'update');
-    } catch (error) {
-      console.error('Failed to update record:', error);
-    }
-  } else {
-    // Create new row (Start Scan)
+  try {
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, '0');
     const day = String(now.getDate()).padStart(2, '0');
-    const strictDateStr = `${year}-${month}-${day}`;
+    const currentDateStr = `${year}-${month}-${day}`;
 
-    const newEntry = {
-      QRcode: code,
-      Type_of_Problem: selectedProblemType.value,
-      No_of_Effective_Man: effectiveManpower.value,
-      Start_time: formatDeviceTime(now),
-      End_Time: '',
-      Ttl_Time: '-',
-      Remarks: 'Scan initiated - awaiting end scan',
-      Created_Date: strictDateStr
-    };
+    if (selectedTimeRange.value === 'end') {
+      const activeRecord = records.value.find(
+        r => r.QRcode === code && 
+             r.Device_Name === operatorName.value &&
+             (!r.End_Time || r.End_Time === '-' || r.End_Time === '')
+      );
 
-    try {
-      // FIXED: Passed SHEET_NAME as the first argument
-      await dbAPI.saveRecord(SHEET_NAME, newEntry, 'create');
-
-      // Refresh list to fetch the newly generated ID/row from Google Sheets
-      const refreshedData = await dbAPI.getRecords(SHEET_NAME);
-      if (refreshedData) {
-        records.value = refreshedData.reverse();
+      if (!activeRecord) {
+        alert('No active running record found for this device with this QR code to end.');
+        isProcessing.value = false;
+        return;
       }
-    } catch (error) {
-      console.error('Failed to create record:', error);
-    }
-  }
 
-  closeScanModal();
+      activeRecord.End_Time = formatDeviceTime(now);
+      activeRecord.Status = 'Resolved';
+      activeRecord.No_of_Effective_Man = effectiveManpower.value || 1;
+
+      if (!activeRecord.Created_Date || activeRecord.Created_Date.includes(':')) {
+        activeRecord.Created_Date = currentDateStr;
+      }
+
+      const startSeconds = parseTotalSecondsFrom12h(activeRecord.Start_time);
+      const endSeconds = parseTotalSecondsFrom12h(activeRecord.End_Time);
+      let diffSeconds = endSeconds - startSeconds;
+      if (diffSeconds < 0) diffSeconds += 24 * 3600;
+
+      const effectiveMan = Number(activeRecord.No_of_Effective_Man) || 1;
+      const mins = Math.floor(diffSeconds / 60);
+      const secs = diffSeconds % 60;
+      
+      activeRecord.Duration_time = `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+      const totalManMins = effectiveMan * mins;
+      activeRecord.Ttl_Time = `${totalManMins} mins`;
+
+      await dbAPI.saveRecord(SHEET_NAME, activeRecord, 'update');
+    } else {
+      const newEntry = {
+        QRcode: code,
+        Type_of_Problem: selectedProblemType.value,
+        Line_No: selectedLineNo.value,
+        No_of_Effective_Man: '',
+        Start_time: formatDeviceTime(now),
+        End_Time: '-',
+        Duration_time: '-',
+        Ttl_Time: '-',
+        Device_Name: operatorName.value,
+        Status: 'Pending',
+        Created_Date: currentDateStr
+      };
+
+      records.value.unshift(newEntry);
+      await dbAPI.saveRecord(SHEET_NAME, newEntry, 'create');
+    }
+  } catch (error) {
+    console.error('Failed to process scan action:', error);
+  } finally {
+    isProcessing.value = false;
+  }
 };
 
 const formatHeader = (headerKey) => headerKey.replace(/_/g, ' ');
 
+const getStatusBadgeClass = (status) => {
+  const normalized = String(status || '').trim().toLowerCase();
+  return (normalized === 'solved' || normalized === 'resolved') 
+    ? 'badge badge-status-solved' 
+    : 'badge badge-status-pending';
+};
+
+// Automatically restricted to today's date (`todayDateStr`) and device filter
 const filteredRecords = computed(() => {
-  if (!searchQuery.value) return records.value;
-  const q = searchQuery.value.toLowerCase();
-  return records.value.filter(record =>
-    Object.values(record).some(val => String(val).toLowerCase().includes(q))
-  );
+  return records.value.filter(record => {
+    const recordDate = record.Created_Date || record.Date || '';
+    const matchesDate = recordDate.startsWith(todayDateStr);
+    const matchesDevice = !filterByCurrentDevice.value || record.Device_Name === operatorName.value;
+    const matchesSearch = !searchQuery.value || 
+      Object.values(record).some(val => String(val).toLowerCase().includes(searchQuery.value.toLowerCase()));
+
+    return matchesDate && matchesDevice && matchesSearch;
+  });
 });
+
+const grandTotalTtlTime = computed(() => {
+  return filteredRecords.value.reduce((sum, record) => {
+    const val = Number(String(record.Ttl_Time || '').replace(/[^0-9]/g, '')) || 0;
+    return sum + val;
+  }, 0);
+});
+
+// Dual-Dataset Chart Data Builder for Daily Bar Charts
+const buildDualChartData = (recordsList, keySelector) => {
+  const map = {};
+  recordsList.forEach(record => {
+    const key = keySelector(record);
+    const timeVal = Number(String(record.Ttl_Time || '').replace(/[^0-9]/g, '')) || 0;
+    
+    if (!map[key]) {
+      map[key] = { mins: 0, taka: 0 };
+    }
+    map[key].mins += timeVal;
+    map[key].taka += timeVal * costPerMinute_TAKA;
+  });
+
+  const labels = Object.keys(map);
+  const minutesData = labels.map(k => map[k].mins);
+  const takaData = labels.map(k => Number(map[k].taka.toFixed(2)));
+
+  return {
+    labels,
+    datasets: [
+      {
+        label: 'Lost Minutes (mins)',
+        data: minutesData,
+        backgroundColor: '#1a73e8',
+        borderRadius: 2
+      },
+      {
+        label: 'Financial Loss (৳ Taka)',
+        data: takaData,
+        backgroundColor: '#34a853',
+        borderRadius: 2
+      }
+    ]
+  };
+};
+
+const problemBarChartData = computed(() => buildDualChartData(filteredRecords.value, r => r.Type_of_Problem || 'Unassigned'));
+const departmentBarChartData = computed(() => buildDualChartData(filteredRecords.value, r => r.Responsible_Dept || r.Responsible_Department || 'Unassigned Dept'));
+const lineBarChartData = computed(() => buildDualChartData(filteredRecords.value, r => r.Line_No ? `Line ${r.Line_No}` : 'Unassigned Line'));
+
+// Helper for building Multi-Month Problem-Wise Line Charts
+const buildMultiLineDataset = (metricKey) => {
+  const allProblems = [...new Set(records.value.map(r => r.Type_of_Problem || 'Unassigned'))].sort();
+  const monthMap = {};
+  const monthTotals = {};
+
+  records.value.forEach(record => {
+    const d = record.Created_Date || record.Date || '';
+    const monthKey = d.length >= 7 ? d.substring(0, 7) : 'Unknown';
+    if (!monthMap[monthKey]) {
+      monthMap[monthKey] = {};
+      monthTotals[monthKey] = 0;
+    }
+    const prob = record.Type_of_Problem || 'Unassigned';
+    const timeVal = Number(String(record.Ttl_Time || '').replace(/[^0-9]/g, '')) || 0;
+
+    monthMap[monthKey][prob] = (monthMap[monthKey][prob] || 0) + timeVal;
+    monthTotals[monthKey] += timeVal;
+  });
+
+  const months = Object.keys(monthMap).sort();
+  const colorPalette = ['#1a73e8', '#ea4335', '#fbbc05', '#34a853', '#ff6d01', '#7b1fa2', '#00796b'];
+
+  const datasets = months.map((month, idx) => {
+    const dataPoints = allProblems.map(prob => {
+      const probVal = monthMap[month][prob] || 0;
+      if (metricKey === 'mins') return probVal;
+      if (metricKey === 'taka') return Number((probVal * costPerMinute_TAKA).toFixed(2));
+      if (metricKey === 'percentage') {
+        const total = monthTotals[month] || 0;
+        return total > 0 ? Number(((probVal / total) * 100).toFixed(1)) : 0;
+      }
+      return probVal;
+    });
+
+    const color = colorPalette[idx % colorPalette.length];
+
+    let formattedMonthName = month;
+    if (month.includes('-')) {
+      const [y, m] = month.split('-');
+      const dateObj = new Date(Number(y), Number(m) - 1, 1);
+      formattedMonthName = dateObj.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+    }
+
+    return {
+      label: formattedMonthName,
+      data: dataPoints,
+      borderColor: color,
+      backgroundColor: color,
+      borderWidth: 2,
+      fill: false,
+      tension: 0.2
+    };
+  });
+
+  return {
+    labels: allProblems,
+    datasets: datasets
+  };
+};
+
+const monthlyMultiLineMinutesChartData = computed(() => buildMultiLineDataset('mins'));
+const monthlyMultiLineTakaChartData = computed(() => buildMultiLineDataset('taka'));
+const monthlyMultiLinePercentageChartData = computed(() => buildMultiLineDataset('percentage'));
+
+const barChartOptions = {
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: {
+    legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 10 } } },
+    datalabels: { display: false }
+  },
+  scales: {
+    x: { ticks: { font: { size: 9 } } },
+    y: { beginAtZero: true, ticks: { font: { size: 9 } } }
+  }
+};
+
+const lineChartMinutesOptions = {
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: {
+    legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 10 } } },
+    datalabels: { display: false }
+  },
+  scales: {
+    x: { ticks: { font: { size: 9 } } },
+    y: { beginAtZero: true, title: { display: true, text: 'Lost Minutes (mins)', font: { size: 10, weight: 'bold' } }, ticks: { font: { size: 9 } } }
+  }
+};
+
+const lineChartTakaOptions = {
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: {
+    legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 10 } } },
+    datalabels: { display: false }
+  },
+  scales: {
+    x: { ticks: { font: { size: 9 } } },
+    y: { beginAtZero: true, title: { display: true, text: 'Financial Loss (৳ Taka)', font: { size: 10, weight: 'bold' } }, ticks: { font: { size: 9 } } }
+  }
+};
+
+const lineChartPercentageOptions = {
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: {
+    legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 10 } } },
+    datalabels: {
+      display: true,
+      align: 'top',
+      anchor: 'end',
+      font: { size: 9, weight: 'bold' },
+      formatter: (value) => (value > 0 ? `${value}%` : '')
+    }
+  },
+  scales: {
+    x: { ticks: { font: { size: 9 } } },
+    y: { 
+      beginAtZero: true, 
+      max: 100, 
+      title: { display: true, text: 'Percentage (%)', font: { size: 10, weight: 'bold' } }, 
+      ticks: { font: { size: 9 }, callback: (v) => `${v}%` } 
+    }
+  }
+};
 </script>
 
 <style scoped>
 .dashboard-container {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: Arial, sans-serif;
+  width: 100%;
   max-width: 100%;
-  margin: 2rem auto;
-  padding: 1.5rem;
+  margin: 0;
+  padding: 4px;
   background: #ffffff;
-  border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  box-sizing: border-box;
 }
 
-.table-header {
+@media (min-width: 768px) {
+  .dashboard-container {
+    max-width: 1400px;
+    margin: 10px auto;
+    padding: 12px;
+    border: 1px solid #d0d7de;
+    border-radius: 4px;
+    background: #ffffff;
+    box-shadow: none;
+  }
+}
+
+.dashboard-top-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 1.5rem;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #d0d7de;
+  width: 100%;
 }
 
-.actions {
+.top-left-device-badge {
+  background: #f8f9fa;
+  color: #1a73e8;
+  border: 1px solid #d4d4d4;
+  padding: 3px 8px;
+  border-radius: 20px;
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.pipup-device-badge {
+  background: #f8f9fa;
+  color: #1a73e8;
+  border: 1px solid #d4d4d4;
+  padding: 3px 8px;
+  border-radius: 20px;
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  width: 50%;
+}
+
+
+.left-device-badge {
+  background: #1a73e8;
+  padding: 3px 8px;
+  border-radius: 20px;
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  font-weight: bold;
+}
+
+.filter-clickable-badge {
+  cursor: pointer;
+  user-select: none;
+}
+
+.filter-clickable-badge:hover {
+  background: #f1f3f4;
+}
+
+.filter-clickable-badge.inactive {
+  background: #f1f3f4;
+  color: #5f6368;
+  border-color: #d4d4d4;
+}
+
+.filter-status-text {
+  font-size: 10px;
+  opacity: 0.85;
+  margin-left: 2px;
+}
+
+.header-right-toolbar {
   display: flex;
-  gap: 1rem;
+  align-items: center;
+  gap: 4px;
 }
 
-.search-input {
-  padding: 0.5rem 1rem;
-  border: 1px solid #d1d5db;
-  border-radius: 6px;
-  outline: none;
+.modal-corner-badge {
+  margin-bottom: 8px;
+  display: inline-flex;
 }
 
-.table-wrapper {
+.device-dot {
+  width: 6px;
+  height: 6px;
+  background-color: #92e81a;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.dot-inactive {
+  background-color: #94a3b8;
+}
+
+.tabs-container {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid #d0d7de;
+  padding-bottom: 4px;
+  width: 100%;
+}
+
+.tab-btn {
+  padding: 6px 12px;
+  background-color: #f1f3f4;
+  border: 1px solid #d4d4d4;
+  border-radius: 2px 2px 0 0;
+  font-weight: bold;
+  font-size: 11px;
+  color: #333333;
+  cursor: pointer;
+  text-align: center;
+}
+
+.tab-btn:hover {
+  background-color: #e5e7eb;
+}
+
+.tab-btn.active {
+  background-color: #ffffff;
+  color: #1a73e8;
+  border-bottom: 2px solid #ffffff;
+  margin-bottom: -1px;
+}
+
+.table-section-title {
+  font-size: 12px;
+  font-weight: bold;
+  margin-bottom: 4px;
+  color: #333;
+  margin-left: 3px;
+}
+
+.excel-sheet-wrapper {
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-height: 60vh;
+  overflow-y: auto;
+  border: 1px solid #d0d7de;
+  border-radius: 0;
+  background: #ffffff;
 }
 
-table {
+.excel-table {
   width: 100%;
   border-collapse: collapse;
   text-align: left;
+  font-size: 11px;
+  table-layout: auto;
 }
 
-th,
-td {
-  padding: 0.75rem 1rem;
-  border-bottom: 1px solid #e5e7eb;
+.excel-cell-header,
+.excel-cell {
+  border: 1px solid #d4d4d4;
+  padding: 3px 6px;
+  white-space: nowrap;
+  color: #000000;
+  height: 22px;
+  text-align: center;
 }
 
-th {
-  background-color: #f9fafb;
-  color: #374151;
-  font-weight: 600;
-  text-transform: capitalize;
+.excel-cell-header {
+  background-color: #f3f3f3;
+  color: #333333;
+  font-weight: bold;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  text-align: center;
+  border-bottom: 2px solid #bcbcbc;
+}
+
+.row-index-header,
+.row-index-cell {
+  background-color: #f3f3f3;
+  color: #595959;
+  text-align: center;
+  width: 35px;
+  min-width: 35px;
+  font-weight: bold;
+  border: 1px solid #d4d4d4;
+  height: 22px;
+}
+
+.excel-row:hover {
+  background-color: #f8f9fa;
+}
+
+.grand-total-row {
+  background-color: #f1f3f4;
+}
+
+.font-bold {
+  font-weight: bold;
+}
+
+.text-right {
+  text-align: right;
 }
 
 .badge {
-  padding: 0.25rem 0.5rem;
-  border-radius: 4px;
-  font-size: 0.85rem;
-  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 2px;
+  font-size: 10px;
+  font-weight: 600;
 }
 
 .badge-code {
-  background: #eff6ff;
-  color: #1d4ed8;
+  background: #e8f0fe;
+  color: #1a73e8;
   font-family: monospace;
 }
 
 .badge-problem {
-  background: #fef2f2;
-  color: #dc2626;
+  background: #fce8e6;
+  color: #c5221f;
 }
 
 .badge-ttl {
-  background: #f3f4f6;
-  color: #1f2937;
+  background: #f1f3f4;
+  color: #202124;
   font-family: monospace;
-  font-weight: 600;
+  font-weight: bold;
+}
+
+.badge-cost {
+  background: #e6f4ea;
+  color: #137333;
+  font-family: monospace;
+  font-weight: bold;
+}
+
+.badge-ttl-total {
+  background: #e8f0fe;
+  color: #1a73e8;
+  font-family: monospace;
+  font-weight: bold;
+}
+
+.badge-status-solved {
+  background: #dcfce7;
+  color: #16a34a;
+  border: 1px solid #bbf7d0;
+}
+
+.badge-status-pending {
+  background: #fee2e2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
 }
 
 .no-data {
   text-align: center;
-  color: #6b7280;
-  padding: 2rem;
+  color: #5f6368;
+  padding: 15px;
+  font-style: italic;
+  font-size: 11px;
+}
+
+.charts-row {
+  display: flex;
+  gap: 12px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.chart-col {
+  flex: 1;
+  min-width: 320px;
+}
+
+.chart-container-wrapper {
+  padding: 12px;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+  background: #ffffff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.chart-header-title {
+  font-size: 11px;
+  font-weight: bold;
+  color: #333333;
+  margin-bottom: 8px;
+  text-align: center;
+}
+
+.chart-canvas-box {
+  width: 100%;
+  height: 240px;
+  position: relative;
 }
 
 .btn {
-  padding: 0.5rem 1rem;
-  border-radius: 6px;
+  padding: 6px 12px;
+  border-radius: 2px;
   border: none;
   cursor: pointer;
-  font-weight: 500;
+  font-weight: bold;
+  font-size: 11px;
+  text-align: center;
 }
 
 .btn-primary {
-  background-color: #2563eb;
+  background-color: #1a73e8;
   color: #ffffff;
 }
 
+.btn-primary:hover {
+  background-color: #1557b0;
+}
+
 .btn-secondary {
+  background-color: #f3f3f3;
+  color: #333333;
+  border: 1px solid #a3a3a3;
+  width: 100%;
+}
+
+.btn-secondary:hover {
   background-color: #e5e7eb;
-  color: #374151;
 }
 
 .modal-overlay {
@@ -380,106 +1055,146 @@ th {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(0, 0, 0, 0.4);
   display: flex;
   justify-content: center;
   align-items: center;
   z-index: 1000;
+  padding: 8px;
+  box-sizing: border-box;
 }
 
 .modal-content {
   position: relative;
   background: white;
-  padding: 2rem;
-  border-radius: 8px;
-  width: 450px;
-  max-width: 90%;
-}
-
-.scanner-modal {
-  width: 400px;
+  padding: 16px;
+  border-radius: 4px;
+  width: 100%;
+  max-width: 400px;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  box-sizing: border-box;
 }
 
 .btn-close-absolute {
   position: absolute;
-  top: 15px;
-  right: 15px;
+  top: 8px;
+  right: 8px;
   background: transparent;
   border: none;
-  font-size: 1.25rem;
+  font-size: 18px;
   font-weight: bold;
-  color: #6b7280;
+  color: #5f6368;
   cursor: pointer;
-  padding: 0.25rem 0.5rem;
-  line-height: 1;
-  border-radius: 4px;
+  padding: 2px 6px;
+  line-align: 1;
 }
 
 .btn-close-absolute:hover {
-  background-color: #f3f4f6;
-  color: #1f2937;
+  background-color: #f1f3f4;
 }
 
 .scanner-desc {
-  font-size: 0.85rem;
-  color: #6b7280;
-  margin-bottom: 1rem;
-  padding-right: 1rem;
-}
-
-.active-problem-badge {
-  font-size: 0.85rem;
-  color: #1f2937;
-  margin-bottom: 0.5rem;
-  background: #f3f4f6;
-  padding: 0.4rem;
-  border-radius: 4px;
+  font-size: 11px;
+  color: #5f6368;
+  margin-bottom: 8px;
 }
 
 .camera-container {
   width: 100%;
   height: 220px;
   background: #000;
-  border-radius: 6px;
+  border-radius: 2px;
   overflow: hidden;
-  margin-bottom: 1rem;
+  margin-bottom: 8px;
   position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
 }
 
-.camera-loading {
+.scanner-overlay-ui {
   position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+
+.viewfinder-box {
+  width: 160px;
+  height: 160px;
+  border: 2px solid rgba(255, 255, 255, 0.7);
+  border-radius: 4px;
+  position: relative;
+  box-shadow: 0 0 0 2000px rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.laser-line {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: #1a73e8;
+  box-shadow: 0 0 6px #1a73e8;
+  animation: scanLaser 2s infinite ease-in-out;
+}
+
+@keyframes scanLaser {
+  0% { top: 0%; }
+  50% { top: 98%; }
+  100% { top: 0%; }
+}
+
+.scanner-instruction {
   color: #ffffff;
-  font-size: 0.9rem;
+  font-size: 10px;
+  margin-top: 8px;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 2px 6px;
+  border-radius: 2px;
 }
 
 .error-text {
-  color: #dc2626;
-  font-size: 0.8rem;
-  margin-bottom: 1rem;
+  color: #d93025;
+  font-size: 11px;
+  margin-bottom: 8px;
+  text-align: center;
+  font-weight: bold;
 }
 
 .form-group {
-  margin-bottom: 1rem;
+  margin-bottom: 8px;
   display: flex;
   flex-direction: column;
+  width: 100%;
 }
 
 .form-group label {
-  font-size: 0.875rem;
-  margin-bottom: 0.25rem;
-  color: #374151;
-  font-weight: 500;
+  font-size: 11px;
+  margin-bottom: 2px;
+  color: #333333;
+  font-weight: bold;
 }
 
 .form-group input,
 .form-control,
 .select-input {
-  padding: 0.5rem;
-  border: 1px solid #d1d5db;
-  border-radius: 4px;
+  padding: 4px 6px;
+  border: 1px solid #c0c0c0;
+  border-radius: 2px;
   width: 100%;
+  font-size: 12px;
+  background-color: #fff;
+  box-sizing: border-box;
+  height: 28px;
 }
 </style>

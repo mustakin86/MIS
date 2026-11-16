@@ -10,9 +10,11 @@
   },
   "dependencies": {
     "bootstrap": "^5.3.8",
+    "chart.js": "^4.6.1",
     "chartjs-plugin-datalabels": "^2.2.0",
     "qrcode.vue": "^3.11.0",
     "vue": "^3.5.42",
+    "vue-chartjs": "^5.3.4",
     "vue-qrcode-reader": "^5.7.3",
     "vue-router": "^5.4.0"
   },

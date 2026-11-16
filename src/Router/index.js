@@ -22,6 +22,11 @@ const routes = [
         name: 'MachineList',
         component: () => import('@/views/Library/machine_list.vue')
       },
+       {
+        path: '/add_line',
+        name: 'AddLine',
+        component: () => import('@/views/Library/add_line.vue')
+      },
       {
         path: '/user',
         name: 'UserList',
@@ -85,7 +90,7 @@ const routes = [
       {
         path: '/addMachine',
         name: 'AddMachine',
-        component: () => import('@/views/npt_QR_code/addMachine.vue')
+        component: () => import('@/views/machine_inventory/addMachine.vue')
       }
     ]
   }
