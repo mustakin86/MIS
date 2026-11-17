@@ -116,7 +116,7 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
-import { dbAPI } from '@/services/npr_qr_code_api.js'
+import { dbAPI } from '@/services/problem_category_api.js'
 
 const sheetsConfig = {
     ProblemName: {
