@@ -3,7 +3,7 @@
         <!-- Data Table View -->
         <div class="table-section">
             <div class="table-header-row no-print">
-                <h3>Machine List</h3>
+                <h4>Machine List (Total: {{ tableData.length }})</h4>
                 <div class="header-actions">
                     <button @click="openAddModal" class="btn-primary">＋ Add New Machine</button>
                     <button @click="printTable" class="btn-print">🖨️ Print</button>
@@ -12,7 +12,7 @@
 
             <div v-if="fetching" class="loading no-print">Loading machine inventory...</div>
 
-            <!-- Main Screen Table -->
+            <!-- Main Screen Table with Sticky Header & Pagination Support -->
             <div v-else-if="tableData.length > 0" class="excel-table-wrapper no-print">
                 <table class="screen-only-table">
                     <thead>
@@ -27,8 +27,8 @@
                         </tr>
                     </thead>
                     <tbody>
-                        <tr v-for="(row, index) in tableData" :key="row.rowIndex">
-                            <td class="excel-cell row-num">{{ index + 1 }}</td>
+                        <tr v-for="(row, index) in paginatedTableData" :key="row.rowIndex">
+                            <td class="excel-cell row-num">{{ (currentPage - 1) * pageSize + index + 1 }}</td>
                             <td v-for="header in sheetsConfig[currentSheetKey].headers" :key="header"
                                 class="excel-cell">
                                 {{ row[header] }}
@@ -37,10 +37,9 @@
                             <td class="excel-cell">
                                 <div class="table-qr-cell">
                                     <qrcode-vue
-                                        :value="row.BQ_Code || `${row.Factory_Name || ''} ${row.Machine_ID || ''}`.trim()"
+                                        :value="`${row.Factory_Name || 'ACL'} ${row.Machine_ID}`"
                                         :size="80" level="H" />
-                                    <span class="qr-code-label">{{ row.BQ_Code || `${row.Factory_Name || ''}
-                                        ${row.Machine_ID || ''}`.trim() }}</span>
+                                    <span class="qr-code-label">{{ `${row.Factory_Name || 'ACL'} ${row.Machine_ID}` }}</span>
                                 </div>
                             </td>
 
@@ -53,6 +52,13 @@
                 </table>
             </div>
             <p v-else class="no-data no-print">No machine records found.</p>
+
+            <!-- MS Access Style Pagination Controls Bar -->
+            <div v-if="tableData.length > pageSize" class="pagination-bar no-print">
+                <button @click="changePage(currentPage - 1)" :disabled="currentPage === 1" class="btn-page"><</button>
+                <span class="page-info">Page {{ currentPage }} of {{ totalPages }}</span>
+                <button @click="changePage(currentPage + 1)" :disabled="currentPage === totalPages" class="btn-page">></button>
+            </div>
         </div>
 
         <!-- Feedback Alerts -->
@@ -167,10 +173,9 @@
     <!-- Dedicated Print-Only Grid Container -->
     <div v-if="tableData.length > 0" class="print-only-grid">
         <div v-for="row in tableData" :key="row.rowIndex" class="print-qr-card">
-            <qrcode-vue :value="row.BQ_Code || `${row.Factory_Name || ''} ${row.Machine_ID || ''}`.trim()" :size="120"
+            <qrcode-vue :value="`${row.Factory_Name || 'ACL'} ${row.Machine_ID}`" :size="120"
                 level="H" />
-            <span class="print-qr-text">{{ row.BQ_Code || `${row.Factory_Name || ''} ${row.Machine_ID || ''}`.trim()
-            }}</span>
+            <span class="print-qr-text">{{ `${row.Factory_Name || 'ACL'} ${row.Machine_ID}` }}</span>
         </div>
     </div>
 </template>
@@ -198,6 +203,26 @@ const isModalOpen = ref(false)
 const isEditing = ref(false)
 const editingRowIndex = ref(null)
 
+// Pagination state
+const currentPage = ref(1)
+const pageSize = ref(20)
+
+const totalPages = computed(() => {
+    return Math.ceil(tableData.value.length / pageSize.value) || 1
+})
+
+const paginatedTableData = computed(() => {
+    const start = (currentPage.value - 1) * pageSize.value
+    const end = start + pageSize.value
+    return tableData.value.slice(start, end)
+})
+
+const changePage = (page) => {
+    if (page >= 1 && page <= totalPages.value) {
+        currentPage.value = page
+    }
+}
+
 const formData = reactive({
     Factory_Name: 'ACL',
     Machine_ID: '',
@@ -212,8 +237,8 @@ const formData = reactive({
 })
 
 const generatedQRValue = computed(() => {
-    const factory = formData.Factory_Name.trim()
-    const mchId = formData.Machine_ID.trim()
+    const factory = String(formData.Factory_Name || 'ACL').trim()
+    const mchId = String(formData.Machine_ID || '').trim()
     if (factory && mchId) {
         return `${factory} ${mchId}`
     }
@@ -240,7 +265,6 @@ const combinedMachineType = computed(() => {
 const openAddModal = async () => {
     isEditing.value = false
     editingRowIndex.value = null
-    // Reset form values for a new entry
     formData.Factory_Name = 'ACL'
     formData.Serial_No = ''
     formData.No_Of_Needle = ''
@@ -261,7 +285,6 @@ const updateRecord = (row) => {
     isEditing.value = true
     editingRowIndex.value = row.rowIndex
 
-    // Populate general fields
     formData.Factory_Name = row.Factory_Name || 'ACL'
     formData.Machine_ID = row.Machine_ID || ''
     formData.Serial_No = row.Serial_No || ''
@@ -270,7 +293,6 @@ const updateRecord = (row) => {
     formData.Special_Feature = row.Special_Feature || ''
     formData.Status = row.Status || 'Running'
 
-    // Try parsing back the combined Machine_Type if it uses slash separators (e.g. "1N/2T/LOCKSTITCH")
     const parts = (row.Machine_Type || '').split('/')
     if (parts.length >= 3) {
         formData.No_Of_Needle = parts[0].replace(/[^0-9]/g, '')
@@ -312,12 +334,15 @@ const handleSubmit = async () => {
     errorMsg.value = ''
     successMsg.value = ''
 
-    // Safely parse values to strings before trimming to prevent type errors
+    const currentFactory = String(formData.Factory_Name || 'ACL').trim()
+    const currentMachineId = String(formData.Machine_ID || '').trim()
+    const computedBQ = `${currentFactory} ${currentMachineId}`
+
     const payloadToSend = {
-        Factory_Name: String(formData.Factory_Name || '').trim(),
-        Machine_ID: String(formData.Machine_ID || '').trim(),
+        Factory_Name: currentFactory,
+        Machine_ID: currentMachineId,
         Serial_No: String(formData.Serial_No || '').trim(),
-        BQ_Code: generatedQRValue.value,
+        BQ_Code: computedBQ,
         Machine_Type: String(combinedMachineType.value || '').trim(),
         Model: String(formData.Model || '').trim(),
         Brand: String(formData.Brand || '').trim(),
@@ -327,13 +352,10 @@ const handleSubmit = async () => {
 
     try {
         if (isEditing.value && editingRowIndex.value !== null) {
-            // Attach rowIndex directly inside the payload object
             payloadToSend.rowIndex = editingRowIndex.value
-
             await dbAPI.saveRecord(currentSheetKey.value, payloadToSend)
             successMsg.value = "Machine updated successfully!"
         } else {
-            // Create brand new record
             await dbAPI.saveRecord(currentSheetKey.value, payloadToSend)
             successMsg.value = "Machine registered successfully!"
         }
@@ -386,7 +408,6 @@ onMounted(async () => {
     text-transform: uppercase;
 }
 
-/* Modal Popup Styles - Centered Perfectly */
 .modal-overlay {
     position: fixed;
     top: 0;
@@ -505,7 +526,7 @@ onMounted(async () => {
     flex-direction: column;
     justify-content: center;
     align-items: center;
-    padding: 4px;
+    padding: 2px;
 }
 
 .qr-code-label {
@@ -601,7 +622,7 @@ select {
 .btn-danger {
     background-color: #d93025;
     color: white;
-    padding: 3px 8px;
+    padding: 2px 6px;
     font-size: 10px;
     border-radius: 2px;
     cursor: pointer;
@@ -611,51 +632,115 @@ select {
 .btn-info {
     background-color: #e8a31a;
     color: white;
-    padding: 3px 8px;
+    padding: 2px 6px;
     font-size: 10px;
     border-radius: 2px;
     cursor: pointer;
     border: none;
-    margin: 4px;
+    margin-right: 4px;
 }
 
+/* MS Access Table Sheet Styling */
 .excel-table-wrapper {
     width: 100%;
+    max-height: 65vh;
+    overflow-y: auto;
     overflow-x: auto;
-    border: 1px solid #d0d7de;
+    border: 2px solid #808080;
     margin-top: 8px;
+    background: #ffffff;
 }
 
 .screen-only-table {
     width: 100%;
-    border-collapse: separate;
+    border-collapse: collapse;
     border-spacing: 0;
-    background: white;
+    background: #ffffff;
     min-width: 900px;
+    font-family: Tahoma, Arial, sans-serif;
 }
 
 .excel-cell {
-    border-bottom: 1px solid #e0e0e0;
-    border-right: 1px solid #e0e0e0;
-    padding: 6px 8px;
-    text-align: center;
+    border: 1px solid #d3d3d3;
+    padding: 3px 5px;
+    text-align: center; /* Centered cell text alignment */
     font-size: 11px;
-    color: #202124;
+    color: #000000;
+    height: 20px;
+    white-space: nowrap;
 }
 
+/* MS Access Gray Gradient Header with Sticky positioning */
 th.excel-cell {
-    background-color: #f1f3f4;
+    background: linear-gradient(to bottom, #f0f0f0 0%, #e0e0e0 100%);
+    color: #000000;
     font-weight: bold;
     position: sticky;
     top: 0;
     z-index: 5;
+    border-bottom: 2px solid #a0a0a0;
+    border-right: 1px solid #b5b5b5;
+    text-align: center; /* Centered header text alignment */
+    padding: 4px 6px;
+}
+
+/* MS Access Zebra Striping */
+.screen-only-table tbody tr:nth-child(even) {
+    background-color: #f7f9fb;
+}
+
+.screen-only-table tbody tr:hover {
+    background-color: #eef4f8;
 }
 
 .row-num {
-    background-color: #f8f9fa;
-    color: #5f6368;
-    width: 35px;
-    font-weight: bold;
+    background-color: #ececec;
+    color: #444444;
+    width: 30px;
+    text-align: center;
+    font-weight: normal;
+    border-right: 2px solid #b5b5b5;
+}
+
+/* MS Access Style Pagination Bar */
+.pagination-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
+    padding: 4px 8px;
+    background: #ececec;
+    border: 1px solid #a0a0a0;
+    border-top: none;
+    border-radius: 0;
+    float: right;
+}
+
+.btn-page {
+    background-color: #e1e1e1;
+    border: 1px solid #adadad;
+    color: #000;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: normal;
+    border-radius: 2px;
+    cursor: pointer;
+}
+
+.btn-page:hover:not(:disabled) {
+    background-color: #e5f1fb;
+    border-color: #0078d7;
+}
+
+.btn-page:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.page-info {
+    font-size: 11px;
+    color: #333;
 }
 
 .error {
@@ -681,12 +766,10 @@ th.excel-cell {
     font-size: 11px;
 }
 
-/* Hidden during normal screen viewing */
 .print-only-grid {
     display: none;
 }
 
-/* Excel-Style Card Wrapper */
 .machine-type-card {
     background: #ffffff;
     border: 1px solid #c0c0c0;
