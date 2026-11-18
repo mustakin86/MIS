@@ -9,7 +9,7 @@
                     <button @click="printTable" class="btn-print">🖨️ Print</button>
                 </div>
             </div>
-            
+
             <div v-if="fetching" class="loading no-print">Loading machine inventory...</div>
 
             <!-- Main Screen Table -->
@@ -18,7 +18,8 @@
                     <thead>
                         <tr>
                             <th class="excel-cell row-num">#</th>
-                            <th v-for="header in sheetsConfig[currentSheetKey].headers" :key="header" class="excel-cell">
+                            <th v-for="header in sheetsConfig[currentSheetKey].headers" :key="header"
+                                class="excel-cell">
                                 {{ header }}
                             </th>
                             <th class="excel-cell">QR View</th>
@@ -28,18 +29,23 @@
                     <tbody>
                         <tr v-for="(row, index) in tableData" :key="row.rowIndex">
                             <td class="excel-cell row-num">{{ index + 1 }}</td>
-                            <td v-for="header in sheetsConfig[currentSheetKey].headers" :key="header" class="excel-cell">
+                            <td v-for="header in sheetsConfig[currentSheetKey].headers" :key="header"
+                                class="excel-cell">
                                 {{ row[header] }}
                             </td>
 
                             <td class="excel-cell">
                                 <div class="table-qr-cell">
-                                    <qrcode-vue :value="row.BQ_Code || `${row.Factory_Name || ''} ${row.Machine_ID || ''}`.trim()" :size="80" level="H" />
-                                    <span class="qr-code-label">{{ row.BQ_Code || `${row.Factory_Name || ''} ${row.Machine_ID || ''}`.trim() }}</span>
+                                    <qrcode-vue
+                                        :value="row.BQ_Code || `${row.Factory_Name || ''} ${row.Machine_ID || ''}`.trim()"
+                                        :size="80" level="H" />
+                                    <span class="qr-code-label">{{ row.BQ_Code || `${row.Factory_Name || ''}
+                                        ${row.Machine_ID || ''}`.trim() }}</span>
                                 </div>
                             </td>
 
                             <td class="excel-cell">
+                                <button @click="updateRecord(row)" class="btn-info">Edit</button>
                                 <button @click="deleteRecord(row.rowIndex)" class="btn-danger">Delete</button>
                             </td>
                         </tr>
@@ -54,15 +60,15 @@
         <p v-if="successMsg" class="success no-print">✔ {{ successMsg }}</p>
     </div>
 
-    <!-- Popup Modal Form for Adding Machine (Centered) -->
+    <!-- Popup Modal Form for Adding/Editing Machine (Centered) -->
     <div v-if="isModalOpen" class="modal-overlay no-print" @click.self="closeAddModal">
         <div class="modal-card">
             <div class="modal-header">
-                <h3>Add New Machine</h3>
+                <h3>{{ isEditing ? 'Edit Machine Record' : 'Add New Machine' }}</h3>
                 <button @click="closeAddModal" class="btn-close">×</button>
             </div>
 
-            <form @submit.prevent="createRecord" class="modal-form">
+            <form @submit.prevent="handleSubmit" class="modal-form">
                 <div class="modal-form-grid">
                     <!-- Column 1 -->
                     <div class="col-modal">
@@ -72,23 +78,41 @@
                         </div>
                         <div class="input-group">
                             <label>Machine ID:</label>
-                            <input v-model="formData.Machine_ID" type="text" placeholder="Auto-generated" readonly required class="readonly-input" />
+                            <input v-model="formData.Machine_ID" type="text" placeholder="Auto-generated" readonly
+                                required class="readonly-input" />
                         </div>
                         <div class="input-group">
                             <label>Serial Number:</label>
                             <input v-model="formData.Serial_No" type="text" placeholder="e.g. 89451203A" required />
                         </div>
-                        <div class="input-group">
-                            <label>Machine Type:</label>
-                            <select v-model="formData.Machine_Type" required>
-                                <option disabled value="">Select Type</option>
-                                <option value="Single Needle Lock Stitch">Single Needle Lock Stitch (SNLS)</option>
-                                <option value="4-Thread Overlock">4-Thread Overlock (4TOL)</option>
-                                <option value="Flatlock">Flatlock</option>
-                                <option value="Bar Tack">Bar Tack</option>
-                                <option value="Buttonhole">Buttonhole</option>
-                                <option value="Button Attaching">Button Attaching</option>
-                            </select>
+                        <div class="machine-type-card">
+                            <div class="spec-table-wrapper">
+                                <table class="spec-table">
+                                    <thead>
+                                        <tr>
+                                            <th>No of Needle</th>
+                                            <th>No of Thread</th>
+                                            <th>Machine Type</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td>
+                                                <input v-model="formData.No_Of_Needle" type="text" placeholder="e.g. 1"
+                                                    class="spec-input" />
+                                            </td>
+                                            <td>
+                                                <input v-model="formData.No_Of_Thread" type="text" placeholder="e.g. 2"
+                                                    class="spec-input" />
+                                            </td>
+                                            <td>
+                                                <input v-model="formData.Machine_Type" type="text"
+                                                    placeholder="e.g. Lockstitch" class="spec-input" />
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                     </div>
 
@@ -96,7 +120,8 @@
                     <div class="col-modal">
                         <div class="input-group">
                             <label>Brand:</label>
-                            <input v-model="formData.Brand" type="text" placeholder="e.g. Juki, Brother, Jack" required />
+                            <input v-model="formData.Brand" type="text" placeholder="e.g. Juki, Brother, Jack"
+                                required />
                         </div>
                         <div class="input-group">
                             <label>Model:</label>
@@ -104,7 +129,8 @@
                         </div>
                         <div class="input-group">
                             <label>Special Feature:</label>
-                            <input v-model="formData.Special_Feature" type="text" placeholder="e.g. Auto Trimmer / Piping Folder" />
+                            <input v-model="formData.Special_Feature" type="text"
+                                placeholder="e.g. Auto Trimmer / Piping Folder" />
                         </div>
                         <div class="input-group">
                             <label>Running Status:</label>
@@ -131,7 +157,7 @@
                 <div class="button-row">
                     <button type="button" @click="closeAddModal" class="btn-secondary">Cancel</button>
                     <button type="submit" :disabled="loading" class="btn-primary">
-                        {{ loading ? 'Saving Machine...' : 'Save Machine' }}
+                        {{ loading ? 'Saving...' : (isEditing ? 'Update Machine' : 'Save Machine') }}
                     </button>
                 </div>
             </form>
@@ -141,8 +167,10 @@
     <!-- Dedicated Print-Only Grid Container -->
     <div v-if="tableData.length > 0" class="print-only-grid">
         <div v-for="row in tableData" :key="row.rowIndex" class="print-qr-card">
-            <qrcode-vue :value="row.BQ_Code || `${row.Factory_Name || ''} ${row.Machine_ID || ''}`.trim()" :size="120" level="H" />
-            <span class="print-qr-text">{{ row.BQ_Code || `${row.Factory_Name || ''} ${row.Machine_ID || ''}`.trim() }}</span>
+            <qrcode-vue :value="row.BQ_Code || `${row.Factory_Name || ''} ${row.Machine_ID || ''}`.trim()" :size="120"
+                level="H" />
+            <span class="print-qr-text">{{ row.BQ_Code || `${row.Factory_Name || ''} ${row.Machine_ID || ''}`.trim()
+            }}</span>
         </div>
     </div>
 </template>
@@ -156,8 +184,8 @@ const sheetsConfig = {
     Machine_List: {
         label: "Machine List",
         name: "Machine_List",
-        headers: [ 'Factory_Name', 'Machine_ID', 'Brand', 'Serial_No', 'Model', 'Machine_Type', 'Special_Feature', 'Status', ]
-    }
+        headers: ['Factory_Name', 'Machine_ID', 'Brand', 'Serial_No', 'Model', 'Machine_Type', 'Special_Feature', 'Status']
+    },
 }
 
 const currentSheetKey = ref('Machine_List')
@@ -167,11 +195,15 @@ const fetching = ref(false)
 const errorMsg = ref('')
 const successMsg = ref('')
 const isModalOpen = ref(false)
+const isEditing = ref(false)
+const editingRowIndex = ref(null)
 
 const formData = reactive({
     Factory_Name: 'ACL',
     Machine_ID: '',
     Serial_No: '',
+    No_Of_Needle: '',
+    No_Of_Thread: '',
     Machine_Type: '',
     Model: '',
     Brand: '',
@@ -197,21 +229,68 @@ const fetchNextId = async () => {
     }
 }
 
+const combinedMachineType = computed(() => {
+    const needle = formData.No_Of_Needle ? `${formData.No_Of_Needle}N` : ''
+    const thread = formData.No_Of_Thread ? `${formData.No_Of_Thread}T` : ''
+    const type = formData.Machine_Type ? formData.Machine_Type : ''
+
+    return [needle, thread, type].filter(Boolean).join('/')
+})
+
 const openAddModal = async () => {
+    isEditing.value = false
+    editingRowIndex.value = null
+    // Reset form values for a new entry
+    formData.Factory_Name = 'ACL'
+    formData.Serial_No = ''
+    formData.No_Of_Needle = ''
+    formData.No_Of_Thread = ''
+    formData.Machine_Type = ''
+    formData.Model = ''
+    formData.Brand = ''
+    formData.Special_Feature = ''
+    formData.Status = 'Running'
+
     isModalOpen.value = true
     errorMsg.value = ''
     successMsg.value = ''
     await fetchNextId()
 }
 
+const updateRecord = (row) => {
+    isEditing.value = true
+    editingRowIndex.value = row.rowIndex
+
+    // Populate general fields
+    formData.Factory_Name = row.Factory_Name || 'ACL'
+    formData.Machine_ID = row.Machine_ID || ''
+    formData.Serial_No = row.Serial_No || ''
+    formData.Brand = row.Brand || ''
+    formData.Model = row.Model || ''
+    formData.Special_Feature = row.Special_Feature || ''
+    formData.Status = row.Status || 'Running'
+
+    // Try parsing back the combined Machine_Type if it uses slash separators (e.g. "1N/2T/LOCKSTITCH")
+    const parts = (row.Machine_Type || '').split('/')
+    if (parts.length >= 3) {
+        formData.No_Of_Needle = parts[0].replace(/[^0-9]/g, '')
+        formData.No_Of_Thread = parts[1].replace(/[^0-9]/g, '')
+        formData.Machine_Type = parts.slice(2).join('/').trim()
+    } else {
+        formData.No_Of_Needle = ''
+        formData.No_Of_Thread = ''
+        formData.Machine_Type = row.Machine_Type || ''
+    }
+
+    isModalOpen.value = true
+    errorMsg.value = ''
+    successMsg.value = ''
+}
+
 const closeAddModal = () => {
     isModalOpen.value = false
-    formData.Serial_No = ''
-    formData.Machine_Type = ''
-    formData.Model = ''
-    formData.Brand = ''
-    formData.Special_Feature = ''
-    formData.Status = 'Running'
+    isEditing.value = false
+    editingRowIndex.value = null
 }
 
 const fetchData = async () => {
@@ -228,31 +307,41 @@ const fetchData = async () => {
     }
 }
 
-const createRecord = async () => {
+const handleSubmit = async () => {
     loading.value = true
     errorMsg.value = ''
     successMsg.value = ''
 
+    // Safely parse values to strings before trimming to prevent type errors
     const payloadToSend = {
-        Factory_Name: formData.Factory_Name.trim(),
-        Machine_ID: formData.Machine_ID.trim(),
-        Serial_No: formData.Serial_No.trim(),
+        Factory_Name: String(formData.Factory_Name || '').trim(),
+        Machine_ID: String(formData.Machine_ID || '').trim(),
+        Serial_No: String(formData.Serial_No || '').trim(),
         BQ_Code: generatedQRValue.value,
-        Machine_Type: formData.Machine_Type.trim(),
-        Model: formData.Model.trim(),
-        Brand: formData.Brand.trim(),
-        Special_Feature: formData.Special_Feature.trim(),
-        Status: formData.Status
+        Machine_Type: String(combinedMachineType.value || '').trim(),
+        Model: String(formData.Model || '').trim(),
+        Brand: String(formData.Brand || '').trim(),
+        Special_Feature: String(formData.Special_Feature || '').trim(),
+        Status: String(formData.Status || 'Running')
     }
 
     try {
-        await dbAPI.saveRecord(currentSheetKey.value, payloadToSend)
-        successMsg.value = "Machine registered successfully!"
+        if (isEditing.value && editingRowIndex.value !== null) {
+            // Attach rowIndex directly inside the payload object
+            payloadToSend.rowIndex = editingRowIndex.value
+
+            await dbAPI.saveRecord(currentSheetKey.value, payloadToSend)
+            successMsg.value = "Machine updated successfully!"
+        } else {
+            // Create brand new record
+            await dbAPI.saveRecord(currentSheetKey.value, payloadToSend)
+            successMsg.value = "Machine registered successfully!"
+        }
 
         closeAddModal()
         await fetchData()
     } catch (err) {
-        errorMsg.value = "Network error during machine registration."
+        errorMsg.value = "Network error during machine saving."
         console.error(err)
     } finally {
         loading.value = false
@@ -294,6 +383,7 @@ onMounted(async () => {
     border-radius: 4px;
     background: #ffffff;
     box-sizing: border-box;
+    text-transform: uppercase;
 }
 
 /* Modal Popup Styles - Centered Perfectly */
@@ -320,7 +410,7 @@ onMounted(async () => {
     box-sizing: border-box;
     max-height: 90vh;
     overflow-y: auto;
-    margin: auto; /* Ensures perfect centering even with max-height limits */
+    margin: auto;
 }
 
 .modal-header {
@@ -349,7 +439,7 @@ onMounted(async () => {
 .modal-form-grid {
     display: flex;
     flex-wrap: wrap;
-    justify-content: center; /* Centers grid columns if wrapping occurs */
+    justify-content: center;
     align-items: flex-start;
     gap: 15px;
 }
@@ -440,7 +530,8 @@ label {
     text-align: left;
 }
 
-input, select {
+input,
+select {
     width: 100%;
     padding: 6px 8px;
     border: 1px solid #c0c0c0;
@@ -449,6 +540,7 @@ input, select {
     background-color: white;
     height: 30px;
     box-sizing: border-box;
+    text-transform: uppercase;
 }
 
 .readonly-input {
@@ -466,10 +558,10 @@ input, select {
     padding-top: 12px;
 }
 
-.btn-primary[data-v-e54624f2] {
+.btn-primary {
     background-color: #1a73e8;
     color: white;
-    padding: 6px 6px;
+    padding: 6px 12px;
     font-size: 11px;
     height: 28px;
     border-radius: 4px;
@@ -516,6 +608,17 @@ input, select {
     border: none;
 }
 
+.btn-info {
+    background-color: #e8a31a;
+    color: white;
+    padding: 3px 8px;
+    font-size: 10px;
+    border-radius: 2px;
+    cursor: pointer;
+    border: none;
+    margin: 4px;
+}
+
 .excel-table-wrapper {
     width: 100%;
     overflow-x: auto;
@@ -555,25 +658,125 @@ th.excel-cell {
     font-weight: bold;
 }
 
-.error { color: #d93025; font-weight: bold; margin-top: 6px; font-size: 11px; }
-.success { color: #137333; font-weight: bold; margin-top: 6px; font-size: 11px; }
-.loading, .no-data { color: #5f6368; font-style: italic; text-align: center; padding: 10px; font-size: 11px; }
+.error {
+    color: #d93025;
+    font-weight: bold;
+    margin-top: 6px;
+    font-size: 11px;
+}
+
+.success {
+    color: #137333;
+    font-weight: bold;
+    margin-top: 6px;
+    font-size: 11px;
+}
+
+.loading,
+.no-data {
+    color: #5f6368;
+    font-style: italic;
+    text-align: center;
+    padding: 10px;
+    font-size: 11px;
+}
 
 /* Hidden during normal screen viewing */
 .print-only-grid {
     display: none;
 }
+
+/* Excel-Style Card Wrapper */
+.machine-type-card {
+    background: #ffffff;
+    border: 1px solid #c0c0c0;
+    border-radius: 2px;
+    padding: 6px;
+    margin-bottom: 8px;
+    box-sizing: border-box;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.spec-table-wrapper {
+    width: 100%;
+    overflow-x: auto;
+    background: #ffffff;
+    border: 1px solid #d4d4d4;
+}
+
+.spec-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    text-align: center;
+}
+
+.spec-table th {
+    background-color: #f3f3f3;
+    color: #1f1f1f;
+    font-size: 10px;
+    font-weight: bold;
+    padding: 5px 4px;
+    border-bottom: 2px solid #d4d4d4;
+    border-right: 1px solid #d4d4d4;
+}
+
+.spec-table th:last-child {
+    border-right: none;
+}
+
+.spec-table td {
+    padding: 0;
+    margin: 0;
+    border-bottom: 1px solid #e0e0e0;
+    border-right: 1px solid #e0e0e0;
+    background-color: #ffffff;
+}
+
+.spec-table td:last-child {
+    border-right: none;
+}
+
+.spec-input {
+    width: 100%;
+    padding: 5px 6px;
+    border: 1px solid transparent;
+    background-color: transparent;
+    border-radius: 0;
+    font-size: 11px;
+    text-align: center;
+    height: 28px;
+    box-sizing: border-box;
+    color: #000000;
+    font-family: Arial, sans-serif;
+    transition: none;
+    text-transform: uppercase;
+}
+
+.spec-input:focus {
+    background-color: #ffffff;
+    border: 2px solid #107c41;
+    outline: none;
+    box-shadow: inset 0 0 0 1px #107c41;
+}
+
+.spec-input::placeholder {
+    color: #a0a0a0;
+    font-style: italic;
+}
 </style>
 
-<!-- Global un-scoped CSS print rule to force-hide application dashboard elements and show ONLY the QR cards -->
 <style>
 @media print {
     body * {
         visibility: hidden !important;
     }
-    .print-only-grid, .print-only-grid * {
+
+    .print-only-grid,
+    .print-only-grid * {
         visibility: visible !important;
     }
+
     .print-only-grid {
         display: flex !important;
         flex-wrap: wrap;
@@ -585,6 +788,7 @@ th.excel-cell {
         padding: 2px;
         background: white;
     }
+
     .print-qr-card {
         display: flex;
         flex-direction: column;
@@ -596,6 +800,7 @@ th.excel-cell {
         height: 230px;
         page-break-inside: avoid;
     }
+
     .print-qr-text {
         font-size: 20px;
         font-weight: bold;

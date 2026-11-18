@@ -4,120 +4,152 @@
     <header class="dashboard-top-header">
       <!-- Left: Active Device Badge -->
       <div class="top-left-device-badge">
-        <span class="device-dot"></span> 
+        <span class="device-dot"></span>
         <button type="button" class="left-device-badge" @click.prevent="openScanModal">
           Scan QR Code
         </button>
       </div>
-      
+
       <!-- Right: Combined Device Filter Badge & Scan Button -->
       <div class="header-right-toolbar">
-        <button 
-          type="button" 
-          class="top-left-device-badge filter-clickable-badge" 
-          :class="{ inactive: !filterByCurrentDevice }" 
-          @click="filterByCurrentDevice = !filterByCurrentDevice"
-          title="Click to toggle device filter"
-        >
-          <span class="device-dot" :class="{ 'dot-inactive': !filterByCurrentDevice }"></span> 
+        <button type="button" class="top-left-device-badge filter-clickable-badge"
+          :class="{ inactive: !filterByCurrentDevice }" @click="filterByCurrentDevice = !filterByCurrentDevice"
+          title="Click to toggle device filter">
+          <span class="device-dot" :class="{ 'dot-inactive': !filterByCurrentDevice }"></span>
           Active Device: <strong>{{ operatorName }}</strong>
           <span class="filter-status-text">({{ filterByCurrentDevice ? 'Filtered' : 'All Devices' }})</span>
         </button>
       </div>
     </header>
 
-    <!-- Tab Navigation -->
+    <!-- Main Tab Navigation -->
     <div class="tabs-container">
-      <button 
-        type="button" 
-        class="tab-btn" 
-        :class="{ active: activeTab === 'records' }" 
-        @click="activeTab = 'records'"
-      >Daily NPT Records
+      <button type="button" class="tab-btn" :class="{ active: activeTab === 'records' }"
+        @click="activeTab = 'records'">Daily NPT Records
       </button>
-      <button 
-        type="button" 
-        class="tab-btn" 
-        :class="{ active: activeTab === 'summary' }" 
-        @click="activeTab = 'summary'"
-      >Summary Report
+      <button type="button" class="tab-btn" :class="{ active: activeTab === 'summary' }"
+        @click="activeTab = 'summary'">Monthly Summary Report
       </button>
     </div>
 
-    <!-- Excel Sheet 1: Daily NPT Records (Today's Data Only) -->
+    <!-- Excel Sheet 1: Daily NPT Records & Child Tabs -->
     <div v-if="activeTab === 'records'" class="records-tab-content">
-      <div class="excel-sheet-wrapper" style="margin-top: 0.5rem;">
-        <table class="excel-table">
-          <thead>
-            <tr>
-              <th class="row-index-header">#</th>
-              <th v-for="header in HEADERS" :key="header" class="excel-cell-header">{{ formatHeader(header) }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="(record, index) in filteredRecords" :key="record.ID || index" class="excel-row">
-              <td class="row-index-cell">{{ index + 1 }}</td>
-              <td v-for="header in HEADERS" :key="header" class="excel-cell">
-                <span v-if="header === 'QRcode'" class="badge badge-code">{{ record[header] }}</span>
-                <span v-else-if="header === 'Type_of_Problem'" class="badge badge-problem">{{ record[header] }}</span>
-                <span v-else-if="header === 'Ttl_Time'" class="badge badge-ttl">{{ record[header] }}</span>
-                <span v-else-if="header === 'Status'" :class="getStatusBadgeClass(record[header])">
-                  {{ record[header] || '-' }}
-                </span>
-                <span v-else>{{ record[header] !== undefined && record[header] !== '' ? record[header] : '-' }}</span>
-              </td>
-            </tr>
-            <tr v-if="filteredRecords.length === 0">
-              <td :colspan="HEADERS.length + 1" class="no-data">No records found for today. Click "Scan QR Code" to log an issue.</td>
-            </tr>
-          </tbody>
-          <!-- Grand Total Footer Row -->
-          <tfoot v-if="filteredRecords.length > 0">
-            <tr class="excel-row grand-total-row">
-              <td class="row-index-header font-bold">Σ</td>
-              <td :colspan="HEADERS.indexOf('Ttl_Time')" class="excel-cell text-right font-bold">Grand Total Lost Time:</td>
-              <td class="excel-cell font-bold badge-ttl-total">{{ grandTotalTtlTime }} mins</td>
-              <td :colspan="HEADERS.length - HEADERS.indexOf('Ttl_Time') - 1" class="excel-cell"></td>
-            </tr>
-          </tfoot>
-        </table>
+      <!-- Child Tab Navigation Under Daily NPT Records -->
+      <div class="sub-tabs-container"
+        style="margin-top: 4px; margin-bottom: 8px; display: flex; gap: 6px; border-bottom: 1px solid #d0d7de; padding-bottom: 4px;">
+        <button type="button" class="tab-btn sub-tab-btn" :class="{ active: activeDailySubTab === 'table_charts' }"
+          @click="activeDailySubTab = 'table_charts'">NPT Table & Charts
+        </button>
+        <button type="button" class="tab-btn sub-tab-btn" :class="{ active: activeDailySubTab === 'day_wise' }"
+          @click="activeDailySubTab = 'day_wise'">Day-wise Bar Chart Analysis
+        </button>
       </div>
 
-      <!-- Side-by-Side Bar Charts Section Below Daily Table -->
-      <div class="charts-row" v-if="filteredRecords.length > 0">
-        <div class="chart-col">
-          <div class="chart-container-wrapper">
-            <div class="chart-header-title">Problem Category Wise (Minutes vs Taka)</div>
-            <div class="chart-canvas-box">
-              <Bar :data="problemBarChartData" :options="barChartOptions" />
+      <!-- Sub-Tab Content 1: Daily Table & Category/Dept/Line Charts -->
+      <div v-if="activeDailySubTab === 'table_charts'">
+        <div class="excel-sheet-wrapper" style="margin-top: 0.5rem;">
+          <table class="excel-table">
+            <thead>
+              <tr>
+                <th class="row-index-header">#</th>
+                <th v-for="header in HEADERS" :key="header" class="excel-cell-header">{{ formatHeader(header) }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(record, index) in filteredRecords" :key="record.ID || index" class="excel-row">
+                <td class="row-index-cell">{{ index + 1 }}</td>
+                <td v-for="header in HEADERS" :key="header" class="excel-cell">
+                  <span v-if="header === 'QRcode'" class="badge badge-code">{{ record[header] }}</span>
+                  <span v-else-if="header === 'Type_of_Problem'" class="badge badge-problem">{{ record[header] }}</span>
+                  <span v-else-if="header === 'Ttl_Time'" class="badge badge-ttl">{{ record[header] }}</span>
+                  <span v-else-if="header === 'Status'" :class="getStatusBadgeClass(record[header])">
+                    {{ record[header] || '-' }}
+                  </span>
+                  <span v-else>{{ record[header] !== undefined && record[header] !== '' ? record[header] : '-' }}</span>
+                </td>
+              </tr>
+              <tr v-if="filteredRecords.length === 0">
+                <td :colspan="HEADERS.length + 1" class="no-data">No records found for today. Click "Scan QR Code" to
+                  log an issue.</td>
+              </tr>
+            </tbody>
+            <!-- Grand Total Footer Row -->
+            <tfoot v-if="filteredRecords.length > 0">
+              <tr class="excel-row grand-total-row">
+                <td class="row-index-header font-bold">Σ</td>
+                <td :colspan="HEADERS.indexOf('Ttl_Time')" class="excel-cell text-right font-bold">Grand Total Lost Time
+                  & Pieces (SMV: {{ AVG_SMV }}):</td>
+                <td class="excel-cell font-bold badge-ttl-total">{{ grandTotalTtlTime }} mins (≈ {{ grandTotalLostPieces
+                }} pcs)</td>
+                <td :colspan="HEADERS.length - HEADERS.indexOf('Ttl_Time') - 1" class="excel-cell"></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+
+        <!-- Side-by-Side Bar Charts Section Below Daily Table -->
+        <div class="charts-row" v-if="filteredRecords.length > 0">
+          <div class="chart-col">
+            <div class="chart-container-wrapper">
+              <div class="chart-header-title">Problem Category Wise (Minutes vs Taka)</div>
+              <div class="chart-canvas-box">
+                <Bar :data="problemBarChartData" :options="barChartOptions" />
+              </div>
+            </div>
+          </div>
+          <div class="chart-col">
+            <div class="chart-container-wrapper">
+              <div class="chart-header-title">Responsible Department Wise (Minutes vs Taka)</div>
+              <div class="chart-canvas-box">
+                <Bar :data="departmentBarChartData" :options="barChartOptions" />
+              </div>
+            </div>
+          </div>
+          <div class="chart-col">
+            <div class="chart-container-wrapper">
+              <div class="chart-header-title">Line Wise (Minutes vs Taka)</div>
+              <div class="chart-canvas-box">
+                <Bar :data="lineBarChartData" :options="barChartOptions" />
+              </div>
             </div>
           </div>
         </div>
-        <div class="chart-col">
-          <div class="chart-container-wrapper">
-            <div class="chart-header-title">Responsible Department Wise (Minutes vs Taka)</div>
-            <div class="chart-canvas-box">
-              <Bar :data="departmentBarChartData" :options="barChartOptions" />
+      </div>
+
+      <!-- Sub-Tab Content 2: Day-wise Bar Chart Analysis -->
+      <div v-if="activeDailySubTab === 'day_wise'">
+        <div class="charts-row" style="margin-top: 16px;" v-if="records.length > 0">
+          <div class="chart-col" style="flex: 1; min-width: 320px;">
+            <div class="chart-container-wrapper">
+              <div class="chart-header-title">Day-wise NPT Impact Analysis (Lost Minutes vs Financial Loss)</div>
+              <div class="chart-canvas-box" style="height: 340px;">
+                <Bar :data="dayWiseBarChartData" :options="barChartOptions" />
+              </div>
             </div>
           </div>
         </div>
-        <div class="chart-col">
-          <div class="chart-container-wrapper">
-            <div class="chart-header-title">Line Wise (Minutes vs Taka)</div>
-            <div class="chart-canvas-box">
-              <Bar :data="lineBarChartData" :options="barChartOptions" />
-            </div>
-          </div>
+        <div v-if="records.length === 0" class="no-data" style="margin-top: 20px;">
+          No historical records available for day-wise analysis.
         </div>
       </div>
     </div>
 
-    <!-- Excel Sheet 2: Summary Report -->
+    <!-- Excel Sheet 2: Monthly Summary Report -->
     <div v-if="activeTab === 'summary'" class="summary-tab-content">
-      <div class="excel-sheet-wrapper" style="margin-top: 0.5rem;">
+      <!-- Child Tab Navigation Under Monthly Tab -->
+      <div class="sub-tabs-container"
+        style="margin-top: 8px; margin-bottom: 12px; display: flex; gap: 6px; border-bottom: 1px solid #d0d7de; padding-bottom: 4px;">
+        <button type="button" class="tab-btn sub-tab-btn" :class="{ active: activeMonthlySubTab === 'trends' }"
+          @click="activeMonthlySubTab = 'trends'">Multi-Month Trends
+        </button>
+        <button type="button" class="tab-btn sub-tab-btn" :class="{ active: activeMonthlySubTab === 'problem_vs_lost' }"
+          @click="activeMonthlySubTab = 'problem_vs_lost'">Problem vs Lost
+        </button>
+      </div>
 
-        <!-- Monthly Problem Multi-Line Trend Chart Section (Lost Minutes) -->
-        <div class="charts-row" style="margin-top: 16px;" v-if="records.length > 0">    
+      <!-- Sub-Tab Content 1: Multi-Month Trend Charts -->
+      <div v-if="activeMonthlySubTab === 'trends'" class="excel-sheet-wrapper" style="margin-top: 0.5rem;">
+        <div class="charts-row" style="margin-top: 16px;" v-if="records.length > 0">
           <div class="chart-col" style="flex: 1; min-width: 320px;">
             <div class="chart-container-wrapper">
               <div class="chart-header-title">Monthly Problem vs Lost Minutes (Multi-Month Line Comparison)</div>
@@ -128,8 +160,7 @@
           </div>
         </div>
 
-        <!-- Monthly Problem Multi-Line Trend Chart Section (Lost Taka) -->
-        <div class="charts-row" style="margin-top: 16px;" v-if="records.length > 0">    
+        <div class="charts-row" style="margin-top: 16px;" v-if="records.length > 0">
           <div class="chart-col" style="flex: 1; min-width: 320px;">
             <div class="chart-container-wrapper">
               <div class="chart-header-title">Monthly Problem vs Lost Taka (Multi-Month Line Comparison)</div>
@@ -140,13 +171,67 @@
           </div>
         </div>
 
-        <!-- Monthly Problem Multi-Line Trend Chart Section (Percentage with Labels) -->
-        <div class="charts-row" style="margin-top: 16px;" v-if="records.length > 0">    
+        <div class="charts-row" style="margin-top: 16px;" v-if="records.length > 0">
           <div class="chart-col" style="flex: 1; min-width: 320px;">
             <div class="chart-container-wrapper">
               <div class="chart-header-title">Monthly Problem vs Percentage (Multi-Month Line Comparison)</div>
               <div class="chart-canvas-box" style="height: 280px;">
                 <Line :data="monthlyMultiLinePercentageChartData" :options="lineChartPercentageOptions" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sub-Tab Content 2: Problem vs Lost Table & Chart -->
+      <div v-if="activeMonthlySubTab === 'problem_vs_lost'" class="excel-sheet-wrapper" style="margin-top: 0.5rem;">
+        <div class="smv-config-banner"
+          style="padding: 6px 12px; background: #f8f9fa; border-bottom: 1px solid #d4d4d4; font-size: 11px; display: flex; align-items: center; justify-content: space-between;">
+          <span><strong>Average Style SMV:</strong> {{ AVG_SMV }}
+          </span>
+        </div>
+        <table class="excel-table">
+          <thead>
+            <tr>
+              <th class="row-index-header">#</th>
+              <th class="excel-cell-header">Type of Problem</th>
+              <th class="excel-cell-header">Total Minutes (mins)</th>
+              <th class="excel-cell-header">Lost Production (Garments Pcs)</th>
+              <th class="excel-cell-header">Total Financial Loss (৳ Taka)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(row, index) in summaryProblemVsLostData" :key="row.problem" class="excel-row">
+              <td class="row-index-cell">{{ index + 1 }}</td>
+              <td class="excel-cell font-bold text-left" style="text-align: left; padding-left: 10px;">
+                <span class="badge badge-problem">{{ row.problem }}</span>
+              </td>
+              <td class="excel-cell badge-ttl">{{ row.totalMins }} mins</td>
+              <td class="excel-cell badge-pcs font-bold" style="color: #b45309;">{{ row.lostPcs }} pcs</td>
+              <td class="excel-cell badge-cost">৳ {{ row.totalTaka.toLocaleString() }}</td>
+            </tr>
+            <tr v-if="summaryProblemVsLostData.length === 0">
+              <td colspan="5" class="no-data">No problem records available for comparison.</td>
+            </tr>
+          </tbody>
+          <tfoot v-if="summaryProblemVsLostData.length > 0">
+            <tr class="excel-row grand-total-row">
+              <td class="row-index-header font-bold">Σ</td>
+              <td class="excel-cell font-bold text-right" style="text-align: right;">Grand Totals:</td>
+              <td class="excel-cell font-bold badge-ttl-total">{{ grandTotalProblemMins }} mins</td>
+              <td class="excel-cell font-bold" style="color: #b45309; background: #fef3c7;">{{ grandTotalProblemPieces
+              }} pcs</td>
+              <td class="excel-cell font-bold badge-cost">৳ {{ grandTotalProblemTaka.toLocaleString() }}</td>
+            </tr>
+          </tfoot>
+        </table>
+
+        <div class="charts-row" style="margin-top: 16px;" v-if="summaryProblemVsLostData.length > 0">
+          <div class="chart-col" style="flex: 1; min-width: 320px;">
+            <div class="chart-container-wrapper">
+              <div class="chart-header-title">Problem Category vs Lost Pieces & Impact</div>
+              <div class="chart-canvas-box" style="height: 300px;">
+                <Bar :data="problemVsLostBarChartData" :options="barChartOptions" />
               </div>
             </div>
           </div>
@@ -158,7 +243,7 @@
     <div v-if="showScanModal" class="modal-overlay" @click.self="closeScanModal">
       <div class="modal-content scanner-modal" @click.stop>
         <button type="button" class="btn-close-absolute" @click.prevent="closeScanModal">&times;</button>
-        
+
         <div class="pipup-device-badge modal-corner-badge">
           <span class="device-dot"></span> Active Device: <strong>{{ operatorName }}</strong>
         </div>
@@ -183,7 +268,7 @@
           <select id="lineNo" v-model="selectedLineNo" @change="onLineChange" class="form-control">
             <option disabled value="">Select line number...</option>
             <option v-for="line in lineOptions" :key="line.ID || line.Line_No" :value="line.Line_No">
-             {{ line.Line_No }}
+              {{ line.Line_No }}
             </option>
           </select>
         </div>
@@ -205,19 +290,15 @@
             placeholder="e.g. 1" />
         </div>
 
-        <button v-if="selectedTimeRange && !cameraActive" type="button" class="btn btn-primary" style="margin-top: 0.5rem; width: 100%;"
-          @click.prevent="startCamera">
+        <button v-if="selectedTimeRange && !cameraActive" type="button" class="btn btn-primary"
+          style="margin-top: 0.5rem; width: 100%;" @click.prevent="startCamera">
           Proceed to Camera Scan
         </button>
 
         <!-- Camera Stream Component -->
         <div v-if="cameraActive">
           <div class="camera-container">
-            <qrcode-stream 
-              :constraints="{ facingMode: 'environment' }" 
-              @detect="onDetect"
-              @error="onCameraError"
-            >
+            <qrcode-stream :constraints="{ facingMode: 'environment' }" @detect="onDetect" @error="onCameraError">
               <div class="scanner-overlay-ui">
                 <div class="viewfinder-box">
                   <div class="laser-line"></div>
@@ -244,18 +325,19 @@ import { QrcodeStream } from 'vue-qrcode-reader';
 import { Chart as ChartJS, Title, Tooltip, Legend, BarElement, LineElement, PointElement, CategoryScale, LinearScale } from 'chart.js';
 import ChartDataLabels from 'chartjs-plugin-datalabels';
 import { Bar, Line } from 'vue-chartjs';
-import { dbAPI } from '@/services/npr_qr_code_api.js';
+import { dbAPI } from '@/services/npt_qr_code_api.js';
 import { dbAPI as Unit_line_API } from '@/services/unit_line_api.js';
 
 ChartJS.register(Title, Tooltip, Legend, BarElement, LineElement, PointElement, CategoryScale, LinearScale, ChartDataLabels);
 
 const SHEET_NAME = 'DailyNPTrecord';
-const SUMMARY_SHEET_NAME = 'SummaryReport';
+const PROBLEM_CATEGORIES_SHEET = 'ProblemCategory';
 
-const HEADERS = [ 'Line_No', 'QRcode', 'Type_of_Problem', 'No_of_Effective_Man', 'Start_time', 'End_Time', 'Duration_time', 'Ttl_Time', 'Device_Name', 'Status'];
-const SUMMARY_HEADERS = [ 'Type_of_Problem', 'Ttl_Minuts', 'Ttl_loss(taka)'];
+const HEADERS = ['Line_No', 'QRcode', 'Type_of_Problem', 'No_of_Effective_Man', 'Start_time', 'End_Time', 'Duration_time', 'Ttl_Time', 'Device_Name', 'Status'];
 
 const activeTab = ref('records');
+const activeDailySubTab = ref('table_charts');
+const activeMonthlySubTab = ref('trends');
 const searchQuery = ref('');
 const filterByCurrentDevice = ref(true);
 const showScanModal = ref(false);
@@ -267,24 +349,24 @@ const problemCategories = ref([]);
 const lineOptions = ref([]);
 const selectedProblemType = ref('');
 const selectedLineNo = ref('');
-const selectedTimeRange = ref(''); 
+const selectedTimeRange = ref('');
 const effectiveManpower = ref('');
 
-// Helper to get today's date automatically in YYYY-MM-DD format
 const getCurrentYYYYMMDD = () => {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 };
 
-// Fixed today's date constant for filtering records automatically
 const todayDateStr = getCurrentYYYYMMDD();
 
-// CPM Constants ($25/day mapped to BDT at 120 BDT/$ over a 10-hour/600-min shift = 5 BDT/min)
-const DAILY_MACHINE_COST = 25; 
-const DOLLAR_RATE = 120; 
-const DAILY_WORKING_MINUTES = 600; 
+const DAILY_MACHINE_COST = 25;
+const DOLLAR_RATE = 120;
+const DAILY_WORKING_MINUTES = 600;
 const costPerMinute = DAILY_MACHINE_COST / DAILY_WORKING_MINUTES;
 const costPerMinute_TAKA = costPerMinute * DOLLAR_RATE;
+
+// Average SMV constant for garment production loss conversion
+const AVG_SMV = 4.5;
 
 const getMobileBrandName = () => {
   const ua = navigator.userAgent;
@@ -304,7 +386,6 @@ const getMobileBrandName = () => {
 
 const operatorName = ref(getMobileBrandName());
 const records = ref([]);
-const summaryRecords = ref([]);
 
 const formatDeviceTime = (date = new Date()) => {
   let hours = date.getHours();
@@ -329,12 +410,21 @@ const parseTotalSecondsFrom12h = (timeStr) => {
   return (hours * 3600) + (minutes * 60) + (seconds || 0);
 };
 
-// Fetch Unique Problem Categories dynamically from sheet
 const fetchProblemCategories = async () => {
   try {
-    const data = await dbAPI.getRecords(SHEET_NAME);
-    if (Array.isArray(data) && data.length > 0) {
-      problemCategories.value = [...new Set(data.map(item => item.Type_of_Problem).filter(Boolean))];
+    // Pass the specific Google Sheet ID here
+    const data = await dbAPI.getRecords(PROBLEM_CATEGORIES_SHEET);
+    console.log('Raw Problem Categories Response:', data);
+
+    const records = Array.isArray(data) ? data : (data?.records || data?.data || []);
+
+    if (records.length > 0) {
+      problemCategories.value = [
+        ...new Set(records.map(item => item.Problem_Category || item['Problem Category'] || item.category).filter(Boolean))
+      ];
+      console.log('Loaded Categories:', problemCategories.value);
+    } else {
+      console.warn('ProblemCategory sheet returned 0 rows.');
     }
   } catch (error) {
     console.error('Failed to fetch problem categories:', error);
@@ -356,13 +446,6 @@ onMounted(async () => {
     if (fetchedData?.length) records.value = fetchedData.reverse();
   } catch (error) {
     console.error('Failed to load records:', error);
-  }
-
-  try {
-    const fetchedSummary = await dbAPI.getRecords(SUMMARY_SHEET_NAME);
-    if (fetchedSummary?.length) summaryRecords.value = fetchedSummary;
-  } catch (error) {
-    console.error('Failed to load summary records:', error);
   }
 
   await fetchProblemCategories();
@@ -441,9 +524,9 @@ const processScan = async (scannedCode) => {
 
     if (selectedTimeRange.value === 'end') {
       const activeRecord = records.value.find(
-        r => r.QRcode === code && 
-             r.Device_Name === operatorName.value &&
-             (!r.End_Time || r.End_Time === '-' || r.End_Time === '')
+        r => r.QRcode === code &&
+          r.Device_Name === operatorName.value &&
+          (!r.End_Time || r.End_Time === '-' || r.End_Time === '')
       );
 
       if (!activeRecord) {
@@ -468,7 +551,7 @@ const processScan = async (scannedCode) => {
       const effectiveMan = Number(activeRecord.No_of_Effective_Man) || 1;
       const mins = Math.floor(diffSeconds / 60);
       const secs = diffSeconds % 60;
-      
+
       activeRecord.Duration_time = `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
       const totalManMins = effectiveMan * mins;
       activeRecord.Ttl_Time = `${totalManMins} mins`;
@@ -503,18 +586,17 @@ const formatHeader = (headerKey) => headerKey.replace(/_/g, ' ');
 
 const getStatusBadgeClass = (status) => {
   const normalized = String(status || '').trim().toLowerCase();
-  return (normalized === 'solved' || normalized === 'resolved') 
-    ? 'badge badge-status-solved' 
+  return (normalized === 'solved' || normalized === 'resolved')
+    ? 'badge badge-status-solved'
     : 'badge badge-status-pending';
 };
 
-// Automatically restricted to today's date (`todayDateStr`) and device filter
 const filteredRecords = computed(() => {
   return records.value.filter(record => {
     const recordDate = record.Created_Date || record.Date || '';
     const matchesDate = recordDate.startsWith(todayDateStr);
     const matchesDevice = !filterByCurrentDevice.value || record.Device_Name === operatorName.value;
-    const matchesSearch = !searchQuery.value || 
+    const matchesSearch = !searchQuery.value ||
       Object.values(record).some(val => String(val).toLowerCase().includes(searchQuery.value.toLowerCase()));
 
     return matchesDate && matchesDevice && matchesSearch;
@@ -528,13 +610,17 @@ const grandTotalTtlTime = computed(() => {
   }, 0);
 });
 
-// Dual-Dataset Chart Data Builder for Daily Bar Charts
+const grandTotalLostPieces = computed(() => {
+  if (!AVG_SMV || AVG_SMV <= 0) return 0;
+  return Math.round(grandTotalTtlTime.value / AVG_SMV);
+});
+
 const buildDualChartData = (recordsList, keySelector) => {
   const map = {};
   recordsList.forEach(record => {
     const key = keySelector(record);
     const timeVal = Number(String(record.Ttl_Time || '').replace(/[^0-9]/g, '')) || 0;
-    
+
     if (!map[key]) {
       map[key] = { mins: 0, taka: 0 };
     }
@@ -569,7 +655,42 @@ const problemBarChartData = computed(() => buildDualChartData(filteredRecords.va
 const departmentBarChartData = computed(() => buildDualChartData(filteredRecords.value, r => r.Responsible_Dept || r.Responsible_Department || 'Unassigned Dept'));
 const lineBarChartData = computed(() => buildDualChartData(filteredRecords.value, r => r.Line_No ? `Line ${r.Line_No}` : 'Unassigned Line'));
 
-// Helper for building Multi-Month Problem-Wise Line Charts
+const dayWiseBarChartData = computed(() => {
+  const dayMap = {};
+  records.value.forEach(record => {
+    const d = record.Created_Date || record.Date || 'Unassigned Date';
+    const timeVal = Number(String(record.Ttl_Time || '').replace(/[^0-9]/g, '')) || 0;
+    if (!dayMap[d]) {
+      dayMap[d] = { mins: 0, taka: 0 };
+    }
+    dayMap[d].mins += timeVal;
+    dayMap[d].taka += timeVal * costPerMinute_TAKA;
+  });
+
+  const sortedDays = Object.keys(dayMap).sort();
+  const labels = sortedDays;
+  const minsData = sortedDays.map(d => dayMap[d].mins);
+  const takaData = sortedDays.map(d => Number(dayMap[d].taka.toFixed(2)));
+
+  return {
+    labels,
+    datasets: [
+      {
+        label: 'Lost Minutes (mins)',
+        data: minsData,
+        backgroundColor: '#1a73e8',
+        borderRadius: 2
+      },
+      {
+        label: 'Financial Loss (৳ Taka)',
+        data: takaData,
+        backgroundColor: '#34a853',
+        borderRadius: 2
+      }
+    ]
+  };
+});
+
 const buildMultiLineDataset = (metricKey) => {
   const allProblems = [...new Set(records.value.map(r => r.Type_of_Problem || 'Unassigned'))].sort();
   const monthMap = {};
@@ -634,6 +755,68 @@ const monthlyMultiLineMinutesChartData = computed(() => buildMultiLineDataset('m
 const monthlyMultiLineTakaChartData = computed(() => buildMultiLineDataset('taka'));
 const monthlyMultiLinePercentageChartData = computed(() => buildMultiLineDataset('percentage'));
 
+const summaryProblemVsLostData = computed(() => {
+  const problemMap = {};
+  records.value.forEach(record => {
+    const prob = record.Type_of_Problem || 'Unassigned';
+    const timeVal = Number(String(record.Ttl_Time || '').replace(/[^0-9]/g, '')) || 0;
+    if (!problemMap[prob]) {
+      problemMap[prob] = 0;
+    }
+    problemMap[prob] += timeVal;
+  });
+
+  return Object.keys(problemMap).map(prob => {
+    const totalMins = problemMap[prob];
+    const lostPcs = AVG_SMV > 0 ? Math.round(totalMins / AVG_SMV) : 0;
+    const totalTaka = Number((totalMins * costPerMinute_TAKA).toFixed(2));
+    return { problem: prob, totalMins, lostPcs, totalTaka };
+  }).sort((a, b) => b.totalMins - a.totalMins);
+});
+
+const grandTotalProblemMins = computed(() => {
+  return summaryProblemVsLostData.value.reduce((sum, item) => sum + item.totalMins, 0);
+});
+
+const grandTotalProblemPieces = computed(() => {
+  return summaryProblemVsLostData.value.reduce((sum, item) => sum + item.lostPcs, 0);
+});
+
+const grandTotalProblemTaka = computed(() => {
+  return Number(summaryProblemVsLostData.value.reduce((sum, item) => sum + item.totalTaka, 0).toFixed(2));
+});
+
+const problemVsLostBarChartData = computed(() => {
+  const labels = summaryProblemVsLostData.value.map(i => i.problem);
+  const minsData = summaryProblemVsLostData.value.map(i => i.totalMins);
+  const pcsData = summaryProblemVsLostData.value.map(i => i.lostPcs);
+  const takaData = summaryProblemVsLostData.value.map(i => i.totalTaka);
+
+  return {
+    labels,
+    datasets: [
+      {
+        label: 'Total Lost Minutes (mins)',
+        data: minsData,
+        backgroundColor: '#1a73e8',
+        borderRadius: 2
+      },
+      {
+        label: 'Lost Garments (pcs)',
+        data: pcsData,
+        backgroundColor: '#d97706',
+        borderRadius: 2
+      },
+      {
+        label: 'Total Financial Loss (৳ Taka)',
+        data: takaData,
+        backgroundColor: '#34a853',
+        borderRadius: 2
+      }
+    ]
+  };
+});
+
 const barChartOptions = {
   responsive: true,
   maintainAspectRatio: false,
@@ -688,11 +871,11 @@ const lineChartPercentageOptions = {
   },
   scales: {
     x: { ticks: { font: { size: 9 } } },
-    y: { 
-      beginAtZero: true, 
-      max: 100, 
-      title: { display: true, text: 'Percentage (%)', font: { size: 10, weight: 'bold' } }, 
-      ticks: { font: { size: 9 }, callback: (v) => `${v}%` } 
+    y: {
+      beginAtZero: true,
+      max: 100,
+      title: { display: true, text: 'Percentage (%)', font: { size: 10, weight: 'bold' } },
+      ticks: { font: { size: 9 }, callback: (v) => `${v}%` }
     }
   }
 };
@@ -743,6 +926,7 @@ const lineChartPercentageOptions = {
   gap: 4px;
   white-space: nowrap;
 }
+
 .pipup-device-badge {
   background: #f8f9fa;
   color: #1a73e8;
@@ -756,7 +940,6 @@ const lineChartPercentageOptions = {
   white-space: nowrap;
   width: 50%;
 }
-
 
 .left-device-badge {
   background: #1a73e8;
@@ -849,12 +1032,16 @@ const lineChartPercentageOptions = {
   margin-bottom: -1px;
 }
 
-.table-section-title {
-  font-size: 12px;
-  font-weight: bold;
-  margin-bottom: 4px;
-  color: #333;
-  margin-left: 3px;
+.sub-tab-btn {
+  background-color: #e9ecef;
+  font-size: 10px;
+  padding: 5px 10px;
+}
+
+.sub-tab-btn.active {
+  background-color: #ffffff;
+  color: #1a73e8;
+  border-bottom: 2px solid #ffffff;
 }
 
 .excel-sheet-wrapper {
@@ -945,6 +1132,13 @@ const lineChartPercentageOptions = {
 .badge-ttl {
   background: #f1f3f4;
   color: #202124;
+  font-family: monospace;
+  font-weight: bold;
+}
+
+.badge-pcs {
+  background: #fef3c7;
+  color: #b45309;
   font-family: monospace;
   font-weight: bold;
 }
@@ -1086,7 +1280,6 @@ const lineChartPercentageOptions = {
   color: #5f6368;
   cursor: pointer;
   padding: 2px 6px;
-  line-align: 1;
 }
 
 .btn-close-absolute:hover {
@@ -1149,9 +1342,17 @@ const lineChartPercentageOptions = {
 }
 
 @keyframes scanLaser {
-  0% { top: 0%; }
-  50% { top: 98%; }
-  100% { top: 0%; }
+  0% {
+    top: 0%;
+  }
+
+  50% {
+    top: 98%;
+  }
+
+  100% {
+    top: 0%;
+  }
 }
 
 .scanner-instruction {

@@ -8,7 +8,7 @@
                     <button @click="openAddModal" class="btn-primary">＋ Add Problem</button>
                 </div>
             </div>
-            
+
             <div v-if="fetching" class="loading no-print">Loading problem records...</div>
 
             <!-- Main Screen Table -->
@@ -17,7 +17,8 @@
                     <thead>
                         <tr>
                             <th class="excel-cell row-num">#</th>
-                            <th v-for="header in sheetsConfig[currentSheetKey].headers" :key="header" class="excel-cell">
+                            <th v-for="header in sheetsConfig[currentSheetKey].headers" :key="header"
+                                class="excel-cell">
                                 {{ header.replace('_', ' ') }}
                             </th>
                             <th class="excel-cell action-col">Actions</th>
@@ -26,7 +27,8 @@
                     <tbody>
                         <tr v-for="(row, index) in tableData" :key="row.rowIndex || index">
                             <td class="excel-cell row-num">{{ index + 1 }}</td>
-                            <td v-for="header in sheetsConfig[currentSheetKey].headers" :key="header" class="excel-cell">
+                            <td v-for="header in sheetsConfig[currentSheetKey].headers" :key="header"
+                                class="excel-cell">
                                 {{ row[header] }}
                             </td>
                             <td class="excel-cell action-col">
@@ -60,13 +62,9 @@
                             <tr>
                                 <td class="excel-td row-num-td" style="width: 140px;">Responsible Dept :-</td>
                                 <td class="excel-td">
-                                    <input 
-                                        v-model="formData.Responsible_Department" 
-                                        type="text" 
-                                        placeholder="e.g. Maintenance / IT / Quality" 
-                                        required 
-                                        class="excel-cell-input" 
-                                    />
+                                    <input v-model="formData.Responsible_Department" type="text"
+                                        placeholder="e.g. Maintenance / IT / Quality" required
+                                        class="excel-cell-input" />
                                 </td>
                             </tr>
                         </tbody>
@@ -75,7 +73,7 @@
 
                 <!-- Problem Categories Dynamic Table -->
                 <div class="excel-grid-wrapper">
-                    <table class="excel-sheet-table">  
+                    <table class="excel-sheet-table">
                         <tbody>
                             <tr>
                                 <th class="excel-th row-num-th">#</th>
@@ -85,16 +83,13 @@
                             <tr v-for="(item, index) in formData.problems" :key="index" class="excel-tr">
                                 <td class="excel-td row-num-td">{{ index + 1 }}</td>
                                 <td class="excel-td">
-                                    <input 
-                                        v-model="item.Problem_Category" 
-                                        type="text" 
-                                        placeholder="Enter Problem Category (e.g. Hardware Failure)" 
-                                        @input="checkAutoAddRow(index)" 
-                                        class="excel-cell-input" 
-                                    />
+                                    <input v-model="item.Problem_Category" type="text"
+                                        placeholder="Enter Problem Category (e.g. Hardware Failure)"
+                                        @input="checkAutoAddRow(index)" class="excel-cell-input" />
                                 </td>
                                 <td class="excel-td action-th">
-                                    <button type="button" @click="removeProblemRow(index)" class="excel-btn-delete" title="Remove row">−</button>
+                                    <button type="button" @click="removeProblemRow(index)" class="excel-btn-delete"
+                                        title="Remove row">−</button>
                                 </td>
                             </tr>
                         </tbody>
@@ -116,7 +111,7 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
-import { dbAPI } from '@/services/npr_qr_code_api.js'
+import { dbAPI } from '@/services/npt_qr_code_api.js'
 
 const sheetsConfig = {
     ProblemName: {
@@ -209,7 +204,7 @@ const createRecords = async () => {
                 Problem_Category: item.Problem_Category.trim(),
                 Responsible_Department: formData.Responsible_Department.trim()
             }
-            
+
             console.log("Sending payload item:", payloadToSend)
             await dbAPI.saveRecord(currentSheetKey.value, payloadToSend, 'create')
         }
@@ -477,7 +472,8 @@ th.excel-cell {
     background-color: #ffffff;
 }
 
-.action-th, .action-td {
+.action-th,
+.action-td {
     width: 45px;
     text-align: center;
 }
@@ -530,7 +526,29 @@ th.excel-cell {
     background-color: #fee2e2;
 }
 
-.error { color: #d93025; font-weight: bold; margin: 4px 0 0 0; padding: 0; font-size: 11px; }
-.success { color: #137333; font-weight: bold; margin: 4px 0 0 0; padding: 0; font-size: 11px; }
-.loading, .no-data { color: #5f6368; font-style: italic; text-align: center; padding: 8px; margin: 0; font-size: 11px; }
+.error {
+    color: #d93025;
+    font-weight: bold;
+    margin: 4px 0 0 0;
+    padding: 0;
+    font-size: 11px;
+}
+
+.success {
+    color: #137333;
+    font-weight: bold;
+    margin: 4px 0 0 0;
+    padding: 0;
+    font-size: 11px;
+}
+
+.loading,
+.no-data {
+    color: #5f6368;
+    font-style: italic;
+    text-align: center;
+    padding: 8px;
+    margin: 0;
+    font-size: 11px;
+}
 </style>
