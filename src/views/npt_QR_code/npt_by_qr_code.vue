@@ -27,14 +27,24 @@
       <button type="button" class="tab-btn" :class="{ active: activeTab === 'records' }"
         @click="activeTab = 'records'">Daily NPT Records
       </button>
+<<<<<<< HEAD
       <button type="button" class="tab-btn" :class="{ active: activeTab === 'summary' }"
         @click="activeTab = 'summary'">Monthly Summary Report
+=======
+      <button 
+        type="button" 
+        class="tab-btn" 
+        :class="{ active: activeTab === 'summary' }" 
+        @click="activeTab = 'summary'"
+      >Monthly Summary Report
+>>>>>>> 24996772c3d04f859a9aa65ee52d87ef54e8b811
       </button>
     </div>
 
     <!-- Excel Sheet 1: Daily NPT Records & Child Tabs -->
     <div v-if="activeTab === 'records'" class="records-tab-content">
       <!-- Child Tab Navigation Under Daily NPT Records -->
+<<<<<<< HEAD
       <div class="sub-tabs-container"
         style="margin-top: 4px; margin-bottom: 8px; display: flex; gap: 6px; border-bottom: 1px solid #d0d7de; padding-bottom: 4px;">
         <button type="button" class="tab-btn sub-tab-btn" :class="{ active: activeDailySubTab === 'table_charts' }"
@@ -42,6 +52,22 @@
         </button>
         <button type="button" class="tab-btn sub-tab-btn" :class="{ active: activeDailySubTab === 'day_wise' }"
           @click="activeDailySubTab = 'day_wise'">Day-wise Bar Chart Analysis
+=======
+      <div class="sub-tabs-container" style="margin-top: 4px; margin-bottom: 8px; display: flex; gap: 6px; border-bottom: 1px solid #d0d7de; padding-bottom: 4px;">
+        <button 
+          type="button" 
+          class="tab-btn sub-tab-btn" 
+          :class="{ active: activeDailySubTab === 'table_charts' }" 
+          @click="activeDailySubTab = 'table_charts'"
+        >NPT Table & Charts
+        </button>
+        <button 
+          type="button" 
+          class="tab-btn sub-tab-btn" 
+          :class="{ active: activeDailySubTab === 'day_wise' }" 
+          @click="activeDailySubTab = 'day_wise'"
+        >Day-wise Bar Chart Analysis
+>>>>>>> 24996772c3d04f859a9aa65ee52d87ef54e8b811
         </button>
       </div>
 
@@ -69,18 +95,27 @@
                 </td>
               </tr>
               <tr v-if="filteredRecords.length === 0">
+<<<<<<< HEAD
                 <td :colspan="HEADERS.length + 1" class="no-data">No records found for today. Click "Scan QR Code" to
                   log an issue.</td>
+=======
+                <td :colspan="HEADERS.length + 1" class="no-data">No records found for today. Click "Scan QR Code" to log an issue.</td>
+>>>>>>> 24996772c3d04f859a9aa65ee52d87ef54e8b811
               </tr>
             </tbody>
             <!-- Grand Total Footer Row -->
             <tfoot v-if="filteredRecords.length > 0">
               <tr class="excel-row grand-total-row">
                 <td class="row-index-header font-bold">Σ</td>
+<<<<<<< HEAD
                 <td :colspan="HEADERS.indexOf('Ttl_Time')" class="excel-cell text-right font-bold">Grand Total Lost Time
                   & Pieces (SMV: {{ AVG_SMV }}):</td>
                 <td class="excel-cell font-bold badge-ttl-total">{{ grandTotalTtlTime }} mins (≈ {{ grandTotalLostPieces
                 }} pcs)</td>
+=======
+                <td :colspan="HEADERS.indexOf('Ttl_Time')" class="excel-cell text-right font-bold">Grand Total Lost Time & Pieces (SMV: {{ AVG_SMV }}):</td>
+                <td class="excel-cell font-bold badge-ttl-total">{{ grandTotalTtlTime }} mins (≈ {{ grandTotalLostPieces }} pcs)</td>
+>>>>>>> 24996772c3d04f859a9aa65ee52d87ef54e8b811
                 <td :colspan="HEADERS.length - HEADERS.indexOf('Ttl_Time') - 1" class="excel-cell"></td>
               </tr>
             </tfoot>
@@ -137,6 +172,7 @@
     <!-- Excel Sheet 2: Monthly Summary Report -->
     <div v-if="activeTab === 'summary'" class="summary-tab-content">
       <!-- Child Tab Navigation Under Monthly Tab -->
+<<<<<<< HEAD
       <div class="sub-tabs-container"
         style="margin-top: 8px; margin-bottom: 12px; display: flex; gap: 6px; border-bottom: 1px solid #d0d7de; padding-bottom: 4px;">
         <button type="button" class="tab-btn sub-tab-btn" :class="{ active: activeMonthlySubTab === 'trends' }"
@@ -144,12 +180,32 @@
         </button>
         <button type="button" class="tab-btn sub-tab-btn" :class="{ active: activeMonthlySubTab === 'problem_vs_lost' }"
           @click="activeMonthlySubTab = 'problem_vs_lost'">Problem vs Lost
+=======
+      <div class="sub-tabs-container" style="margin-top: 8px; margin-bottom: 12px; display: flex; gap: 6px; border-bottom: 1px solid #d0d7de; padding-bottom: 4px;">
+        <button 
+          type="button" 
+          class="tab-btn sub-tab-btn" 
+          :class="{ active: activeMonthlySubTab === 'trends' }" 
+          @click="activeMonthlySubTab = 'trends'"
+        >Multi-Month Trends
+        </button>
+        <button 
+          type="button" 
+          class="tab-btn sub-tab-btn" 
+          :class="{ active: activeMonthlySubTab === 'problem_vs_lost' }" 
+          @click="activeMonthlySubTab = 'problem_vs_lost'"
+        >Problem vs Lost
+>>>>>>> 24996772c3d04f859a9aa65ee52d87ef54e8b811
         </button>
       </div>
 
       <!-- Sub-Tab Content 1: Multi-Month Trend Charts -->
       <div v-if="activeMonthlySubTab === 'trends'" class="excel-sheet-wrapper" style="margin-top: 0.5rem;">
+<<<<<<< HEAD
         <div class="charts-row" style="margin-top: 16px;" v-if="records.length > 0">
+=======
+        <div class="charts-row" style="margin-top: 16px;" v-if="records.length > 0">    
+>>>>>>> 24996772c3d04f859a9aa65ee52d87ef54e8b811
           <div class="chart-col" style="flex: 1; min-width: 320px;">
             <div class="chart-container-wrapper">
               <div class="chart-header-title">Monthly Problem vs Lost Minutes (Multi-Month Line Comparison)</div>
@@ -160,7 +216,11 @@
           </div>
         </div>
 
+<<<<<<< HEAD
         <div class="charts-row" style="margin-top: 16px;" v-if="records.length > 0">
+=======
+        <div class="charts-row" style="margin-top: 16px;" v-if="records.length > 0">    
+>>>>>>> 24996772c3d04f859a9aa65ee52d87ef54e8b811
           <div class="chart-col" style="flex: 1; min-width: 320px;">
             <div class="chart-container-wrapper">
               <div class="chart-header-title">Monthly Problem vs Lost Taka (Multi-Month Line Comparison)</div>
@@ -171,7 +231,11 @@
           </div>
         </div>
 
+<<<<<<< HEAD
         <div class="charts-row" style="margin-top: 16px;" v-if="records.length > 0">
+=======
+        <div class="charts-row" style="margin-top: 16px;" v-if="records.length > 0">    
+>>>>>>> 24996772c3d04f859a9aa65ee52d87ef54e8b811
           <div class="chart-col" style="flex: 1; min-width: 320px;">
             <div class="chart-container-wrapper">
               <div class="chart-header-title">Monthly Problem vs Percentage (Multi-Month Line Comparison)</div>
@@ -185,10 +249,15 @@
 
       <!-- Sub-Tab Content 2: Problem vs Lost Table & Chart -->
       <div v-if="activeMonthlySubTab === 'problem_vs_lost'" class="excel-sheet-wrapper" style="margin-top: 0.5rem;">
+<<<<<<< HEAD
         <div class="smv-config-banner"
           style="padding: 6px 12px; background: #f8f9fa; border-bottom: 1px solid #d4d4d4; font-size: 11px; display: flex; align-items: center; justify-content: space-between;">
           <span><strong>Average Style SMV:</strong> {{ AVG_SMV }}
           </span>
+=======
+        <div class="smv-config-banner" style="padding: 6px 12px; background: #f8f9fa; border-bottom: 1px solid #d4d4d4; font-size: 11px; display: flex; align-items: center; justify-content: space-between;">
+          <span><strong>Average Style SMV:</strong> {{ AVG_SMV }} mins/pc (Problem-wise Lost Pieces = $\text{Total Mins} / \text{SMV}$)</span>
+>>>>>>> 24996772c3d04f859a9aa65ee52d87ef54e8b811
         </div>
         <table class="excel-table">
           <thead>
@@ -219,14 +288,22 @@
               <td class="row-index-header font-bold">Σ</td>
               <td class="excel-cell font-bold text-right" style="text-align: right;">Grand Totals:</td>
               <td class="excel-cell font-bold badge-ttl-total">{{ grandTotalProblemMins }} mins</td>
+<<<<<<< HEAD
               <td class="excel-cell font-bold" style="color: #b45309; background: #fef3c7;">{{ grandTotalProblemPieces
               }} pcs</td>
+=======
+              <td class="excel-cell font-bold" style="color: #b45309; background: #fef3c7;">{{ grandTotalProblemPieces }} pcs</td>
+>>>>>>> 24996772c3d04f859a9aa65ee52d87ef54e8b811
               <td class="excel-cell font-bold badge-cost">৳ {{ grandTotalProblemTaka.toLocaleString() }}</td>
             </tr>
           </tfoot>
         </table>
 
+<<<<<<< HEAD
         <div class="charts-row" style="margin-top: 16px;" v-if="summaryProblemVsLostData.length > 0">
+=======
+        <div class="charts-row" style="margin-top: 16px;" v-if="summaryProblemVsLostData.length > 0">    
+>>>>>>> 24996772c3d04f859a9aa65ee52d87ef54e8b811
           <div class="chart-col" style="flex: 1; min-width: 320px;">
             <div class="chart-container-wrapper">
               <div class="chart-header-title">Problem Category vs Lost Pieces & Impact</div>
@@ -325,8 +402,13 @@ import { QrcodeStream } from 'vue-qrcode-reader';
 import { Chart as ChartJS, Title, Tooltip, Legend, BarElement, LineElement, PointElement, CategoryScale, LinearScale } from 'chart.js';
 import ChartDataLabels from 'chartjs-plugin-datalabels';
 import { Bar, Line } from 'vue-chartjs';
+<<<<<<< HEAD
 import { dbAPI } from '@/services/npt_qr_code_api.js';
+=======
+import { dbAPI } from'@/services/npt_qr_code_api.js';
+>>>>>>> 24996772c3d04f859a9aa65ee52d87ef54e8b811
 import { dbAPI as Unit_line_API } from '@/services/unit_line_api.js';
+import { dbAPI as Problem_Category_API } from '@/services/problem_category_api.js';
 
 ChartJS.register(Title, Tooltip, Legend, BarElement, LineElement, PointElement, CategoryScale, LinearScale, ChartDataLabels);
 
@@ -336,8 +418,13 @@ const PROBLEM_CATEGORIES_SHEET = 'ProblemCategory';
 const HEADERS = ['Line_No', 'QRcode', 'Type_of_Problem', 'No_of_Effective_Man', 'Start_time', 'End_Time', 'Duration_time', 'Ttl_Time', 'Device_Name', 'Status'];
 
 const activeTab = ref('records');
+<<<<<<< HEAD
 const activeDailySubTab = ref('table_charts');
 const activeMonthlySubTab = ref('trends');
+=======
+const activeDailySubTab = ref('table_charts'); 
+const activeMonthlySubTab = ref('trends'); 
+>>>>>>> 24996772c3d04f859a9aa65ee52d87ef54e8b811
 const searchQuery = ref('');
 const filterByCurrentDevice = ref(true);
 const showScanModal = ref(false);
@@ -359,14 +446,24 @@ const getCurrentYYYYMMDD = () => {
 
 const todayDateStr = getCurrentYYYYMMDD();
 
+<<<<<<< HEAD
 const DAILY_MACHINE_COST = 25;
 const DOLLAR_RATE = 120;
 const DAILY_WORKING_MINUTES = 600;
+=======
+const DAILY_MACHINE_COST = 25; 
+const DOLLAR_RATE = 120; 
+const DAILY_WORKING_MINUTES = 600; 
+>>>>>>> 24996772c3d04f859a9aa65ee52d87ef54e8b811
 const costPerMinute = DAILY_MACHINE_COST / DAILY_WORKING_MINUTES;
 const costPerMinute_TAKA = costPerMinute * DOLLAR_RATE;
 
 // Average SMV constant for garment production loss conversion
+<<<<<<< HEAD
 const AVG_SMV = 4.5;
+=======
+const AVG_SMV = 4.5; 
+>>>>>>> 24996772c3d04f859a9aa65ee52d87ef54e8b811
 
 const getMobileBrandName = () => {
   const ua = navigator.userAgent;
@@ -410,6 +507,7 @@ const parseTotalSecondsFrom12h = (timeStr) => {
   return (hours * 3600) + (minutes * 60) + (seconds || 0);
 };
 
+<<<<<<< HEAD
 const fetchProblemCategories = async () => {
   try {
     // Pass the specific Google Sheet ID here
@@ -425,6 +523,15 @@ const fetchProblemCategories = async () => {
       console.log('Loaded Categories:', problemCategories.value);
     } else {
       console.warn('ProblemCategory sheet returned 0 rows.');
+=======
+// --- CORRECTED FUNCTION USING Problem_Category_API ---
+const fetchProblemCategories = async () => {
+  try {
+    const data = await Problem_Category_API.getRecords('Problem_Category'); // Adjust table/sheet name parameter if required by your backend
+    if (Array.isArray(data) && data.length > 0) {
+      // Map based on your schema (e.g. item.Problem_Category or item.Name)
+      problemCategories.value = [...new Set(data.map(item => item.Problem_Category || item.Name || item).filter(Boolean))];
+>>>>>>> 24996772c3d04f859a9aa65ee52d87ef54e8b811
     }
   } catch (error) {
     console.error('Failed to fetch problem categories:', error);
@@ -461,6 +568,7 @@ const openScanModal = async () => {
   effectiveManpower.value = '';
   showScanModal.value = true;
   await fetchLineNumbers();
+  await fetchProblemCategories();
 };
 
 const closeScanModal = () => {
@@ -1042,6 +1150,17 @@ const lineChartPercentageOptions = {
   background-color: #ffffff;
   color: #1a73e8;
   border-bottom: 2px solid #ffffff;
+<<<<<<< HEAD
+=======
+}
+
+.table-section-title {
+  font-size: 12px;
+  font-weight: bold;
+  margin-bottom: 4px;
+  color: #333;
+  margin-left: 3px;
+>>>>>>> 24996772c3d04f859a9aa65ee52d87ef54e8b811
 }
 
 .excel-sheet-wrapper {
