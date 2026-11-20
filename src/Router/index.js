@@ -12,6 +12,11 @@ const routes = [
         name: 'Dashboard',
         component: Dashboard
       },
+         {
+        path: '/add_new_Order',
+        name: 'AddNewOrder',
+        component: () => import('@/views/OrderMaster/add_new_Order.vue')
+      },
       {
         path: '/item_list',
         name: 'ItemList',

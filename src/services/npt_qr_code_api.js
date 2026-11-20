@@ -5,8 +5,8 @@ const cacheStore = new Map();
 const inflightRequests = new Map();
 
 const DEFAULT_TTL = {
-  problemCategories: 10 * 60 * 1000, // ১০ মিনিট
-  records: 15 * 1000, // ১৫ সেকেন্ড
+  problemCategories: 10 * 60 * 1000, 
+  records: 15 * 1000, 
 };
 
 function getCached(key) {
