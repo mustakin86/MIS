@@ -737,6 +737,7 @@ th.action-col {
     width: 100%;
     border-collapse: collapse;
     font-size: 11px;
+
 }
 
 .access-th {
