@@ -17,6 +17,11 @@ const routes = [
         name: 'AddNewOrder',
         component: () => import('@/views/OrderMaster/add_new_Order.vue')
       },
+             {
+        path: '/live_board',
+        name: 'LiveBoard',
+        component: () => import('@/views/Production_monitoring/live_board.vue')
+      },
       {
         path: '/item_list',
         name: 'ItemList',

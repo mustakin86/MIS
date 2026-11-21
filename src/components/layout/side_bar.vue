@@ -51,6 +51,24 @@
             </ul>
           </div>
         </li>
+                     <li class="nav-item">
+          <a href="#liveboard" class="nav-link dropdown-toggle collapsed" data-bs-toggle="collapse" role="button"
+            aria-expanded="false">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              class="me-2">
+              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 1 7.07 7.07l1.71-1.71" />
+            </svg>
+            Production monitoring
+          </a>
+          <div class="collapse ms-3 border-start ps-2 my-1" id="liveboard">
+            <ul class="nav nav-pills flex-column gap-1">
+              <li>
+                <RouterLink to="/live_board" class="nav-link py-1 fs-7">Add New Order</RouterLink>
+              </li>
+            </ul>
+          </div>
+        </li>
 
         <!-- User Dropdown -->
         <li class="nav-item">
