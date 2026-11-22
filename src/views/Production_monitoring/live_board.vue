@@ -1,11 +1,16 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { Html5Qrcode } from 'html5-qrcode'
+import { dbAPI as Unit_line_API } from '@/services/unit_line_api.js'
+import { dbAPI as item_API } from '@/services/item_api.js'
 
 const BACKEND_URL =
   'https://script.google.com/macros/s/AKfycbz9QfOx3G6ghMSuA9rtjEZLUPL7qJhn8laR2e2hFIzPgFnE7ch4Jb3K9tevP6wiWmcT/exec'
 
+const UNIT_LINE_SHEET = 'Unit_line_No'
 const LINES_PER_UNIT = 8
 const NPT_ALERT_THRESHOLD_MIN = 30
+const DEFAULT_FALLBACK_UNITS = ['Unit 01', 'Unit 02', 'Unit 03', 'Unit 04']
 
 const NPT_PROBLEM_TYPES = [
   'MACHINE PROBLEM',
@@ -103,14 +108,22 @@ function formatPcsValue(val) {
   return num.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })
 }
 
-function normalizeNptProblems(rawProblems, downtimeMin, fallbackProblem = 'MACHINE PROBLEM', lineIdx = 0, hourIdx = 0) {
+function normalizeNptProblems(
+  rawProblems,
+  downtimeMin,
+  fallbackProblem = 'MACHINE PROBLEM',
+  lineIdx = 0,
+  hourIdx = 0
+) {
   const cleanMins = Math.max(0, Number(downtimeMin) || 0)
   if (cleanMins === 0) return []
 
   if (Array.isArray(rawProblems) && rawProblems.length > 0) {
     const cleaned = rawProblems
       .map((item) => ({
-        problem: String(item?.problem || fallbackProblem || 'MACHINE PROBLEM').trim().toUpperCase(),
+        problem: String(item?.problem || fallbackProblem || 'MACHINE PROBLEM')
+          .trim()
+          .toUpperCase(),
         minutes: Math.max(0, Number(item?.minutes) || 0)
       }))
       .filter((item) => item.minutes > 0)
@@ -184,7 +197,7 @@ function normalizeLineRows(rawRows, lineIndex = 0) {
 
 function aggregateProblemsFromRows(hourlyRows) {
   const map = {}
-  hourlyRows.forEach((r, idx) => {
+  ;(hourlyRows || []).forEach((r, idx) => {
     const mins = Math.max(0, Number(r.downtimeMin) || 0)
     if (mins <= 0) return
     const items = normalizeNptProblems(
@@ -207,7 +220,7 @@ function aggregateProblemsFromRows(hourlyRows) {
 function mergeProblemSummaries(summaries) {
   const map = {}
   summaries.forEach((list) => {
-    ; (list || []).forEach((item) => {
+    ;(list || []).forEach((item) => {
       const key = item.problem || 'MACHINE PROBLEM'
       map[key] = (map[key] || 0) + (Number(item.minutes) || 0)
     })
@@ -217,174 +230,36 @@ function mergeProblemSummaries(summaries) {
     .sort((a, b) => b.minutes - a.minutes)
 }
 
-function createLinesData(totalLines = 32) {
-  const seedLines = [
-    {
-      id: 'line-01',
-      lineName: 'Line 01',
-      unit: 'Unit 01',
+// Blank by default until a non-empty sheet is fetched or lines are saved via the popup
+const linesData = ref([])
+const itemOptions = ref(Object.values(ITEM_NAMES_BY_TYPE))
+
+function buildDefaultFallbackLines(totalLines = 32) {
+  return Array.from({ length: totalLines }, (_, idx) => {
+    const num = idx + 1
+    const padded = String(num).padStart(2, '0')
+    return {
+      id: `line-${padded}`,
+      lineName: `Line ${padded}`,
+      unit: getUnitForLineIndex(idx),
       isActive: true,
-      poNo: 'PO-44102',
-      styleNo: 'STY-7710-WVN',
-      itemName: 'Woven Garment',
-      modelNo: 'MOD-ALPHA-V2',
-      buyer: 'Nordic Apparel',
-      smv: 16.0,
-      operators: 34,
+      poNo: '',
+      styleNo: '',
+      itemName: itemOptions.value[0] || 'Apparel Item',
+      modelNo: MODELS[idx % MODELS.length],
+      buyer: BUYERS[idx % BUYERS.length],
+      smv: 14.0,
+      operators: 32,
       helpers: 6,
       dailyTarget: 1400,
       targetEfficiency: 75,
       maxLineGap: 60,
-      firstMachineTotal: 1172,
+      firstMachineTotal: 0,
       activeHourIndex: 6,
-      hourlyRows: [
-        { hour: '08:00 - 09:00', target: 160, actual: 152, qcPass: 150, dhu: 1.6, downtimeMin: 4, nptProblems: [{ problem: 'MACHINE PROBLEM', minutes: 4 }] },
-        { hour: '09:00 - 10:00', target: 175, actual: 178, qcPass: 175, dhu: 1.4, downtimeMin: 0, nptProblems: [] },
-        { hour: '10:00 - 11:00', target: 175, actual: 169, qcPass: 165, dhu: 2.1, downtimeMin: 3, nptProblems: [{ problem: 'INPUT DELAY', minutes: 3 }] },
-        { hour: '11:00 - 12:00', target: 175, actual: 180, qcPass: 178, dhu: 1.2, downtimeMin: 0, nptProblems: [] },
-        { hour: '12:00 - 01:00', target: 140, actual: 135, qcPass: 133, dhu: 1.7, downtimeMin: 5, nptProblems: [{ problem: 'RIB SHADE', minutes: 5 }] },
-        { hour: '01:00 - 02:00', target: 175, actual: 171, qcPass: 168, dhu: 1.5, downtimeMin: 0, nptProblems: [] },
-        { hour: '02:00 - 03:00', target: 175, actual: 143, qcPass: 141, dhu: 1.3, downtimeMin: 0, nptProblems: [] },
-        { hour: '03:00 - 04:00', target: 175, actual: 0, qcPass: 0, dhu: 0, downtimeMin: 0, nptProblems: [] },
-        { hour: '04:00 - 05:00', target: 50, actual: 0, qcPass: 0, dhu: 0, downtimeMin: 0, nptProblems: [] }
-      ]
-    },
-    {
-      id: 'line-02',
-      lineName: 'Line 02',
-      unit: 'Unit 01',
-      isActive: true,
-      poNo: 'PO-44119',
-      styleNo: 'STY-9021-KNT',
-      itemName: 'Knit Garment',
-      modelNo: 'MOD-SOLO-V4',
-      buyer: 'Kestrel Basics',
-      smv: 12.0,
-      operators: 32,
-      helpers: 5,
-      dailyTarget: 1800,
-      targetEfficiency: 75,
-      maxLineGap: 70,
-      firstMachineTotal: 1461,
-      activeHourIndex: 6,
-      hourlyRows: [
-        { hour: '08:00 - 09:00', target: 200, actual: 204, qcPass: 202, dhu: 1.1, downtimeMin: 0, nptProblems: [] },
-        { hour: '09:00 - 10:00', target: 225, actual: 218, qcPass: 215, dhu: 1.4, downtimeMin: 2, nptProblems: [{ problem: 'THREAD BREAK', minutes: 2 }] },
-        { hour: '10:00 - 11:00', target: 225, actual: 230, qcPass: 228, dhu: 1.0, downtimeMin: 0, nptProblems: [] },
-        { hour: '11:00 - 12:00', target: 225, actual: 221, qcPass: 218, dhu: 1.5, downtimeMin: 0, nptProblems: [] },
-        { hour: '12:00 - 01:00', target: 180, actual: 176, qcPass: 174, dhu: 1.2, downtimeMin: 3, nptProblems: [{ problem: 'BUNDLE SHORTAGE', minutes: 3 }] },
-        { hour: '01:00 - 02:00', target: 225, actual: 228, qcPass: 226, dhu: 0.9, downtimeMin: 0, nptProblems: [] },
-        { hour: '02:00 - 03:00', target: 225, actual: 142, qcPass: 140, dhu: 1.1, downtimeMin: 0, nptProblems: [] },
-        { hour: '03:00 - 04:00', target: 225, actual: 0, qcPass: 0, dhu: 0, downtimeMin: 0, nptProblems: [] },
-        { hour: '04:00 - 05:00', target: 65, actual: 0, qcPass: 0, dhu: 0, downtimeMin: 0, nptProblems: [] }
-      ]
-    },
-    {
-      id: 'line-03',
-      lineName: 'Line 03',
-      unit: 'Unit 01',
-      isActive: true,
-      poNo: 'PO-44145',
-      styleNo: 'STY-5418-PNT',
-      itemName: 'Pant',
-      modelNo: 'MOD-CORE-V1',
-      buyer: 'Harbor & Loom',
-      smv: 18.5,
-      operators: 38,
-      helpers: 7,
-      dailyTarget: 1250,
-      targetEfficiency: 75,
-      maxLineGap: 55,
-      firstMachineTotal: 994,
-      activeHourIndex: 6,
-      hourlyRows: [
-        { hour: '08:00 - 09:00', target: 140, actual: 128, qcPass: 124, dhu: 2.9, downtimeMin: 10, nptProblems: [{ problem: 'MACHINE PROBLEM', minutes: 10 }] },
-        { hour: '09:00 - 10:00', target: 160, actual: 145, qcPass: 141, dhu: 3.1, downtimeMin: 6, nptProblems: [{ problem: 'INPUT DELAY', minutes: 6 }] },
-        { hour: '10:00 - 11:00', target: 160, actual: 152, qcPass: 148, dhu: 2.4, downtimeMin: 4, nptProblems: [{ problem: 'MACHINE PROBLEM', minutes: 4 }] },
-        { hour: '11:00 - 12:00', target: 160, actual: 158, qcPass: 155, dhu: 2.0, downtimeMin: 0, nptProblems: [] },
-        { hour: '12:00 - 01:00', target: 125, actual: 120, qcPass: 117, dhu: 2.2, downtimeMin: 2, nptProblems: [{ problem: 'RIB SHADE', minutes: 2 }] },
-        { hour: '01:00 - 02:00', target: 160, actual: 149, qcPass: 145, dhu: 2.6, downtimeMin: 5, nptProblems: [{ problem: 'POWER / GAS', minutes: 5 }] },
-        { hour: '02:00 - 03:00', target: 160, actual: 94, qcPass: 92, dhu: 1.9, downtimeMin: 0, nptProblems: [] },
-        { hour: '03:00 - 04:00', target: 160, actual: 0, qcPass: 0, dhu: 0, downtimeMin: 0, nptProblems: [] },
-        { hour: '04:00 - 05:00', target: 45, actual: 0, qcPass: 0, dhu: 0, downtimeMin: 0, nptProblems: [] }
-      ]
-    },
-    {
-      id: 'line-04',
-      lineName: 'Line 04',
-      unit: 'Unit 01',
-      isActive: true,
-      poNo: 'PO-44178',
-      styleNo: 'STY-8842-KNT',
-      itemName: 'Knit Garment',
-      modelNo: 'MOD-PRO-V3',
-      buyer: 'Nordic Apparel',
-      smv: 14.5,
-      operators: 36,
-      helpers: 6,
-      dailyTarget: 1600,
-      targetEfficiency: 75,
-      maxLineGap: 60,
-      firstMachineTotal: 1114,
-      activeHourIndex: 6,
-      hourlyRows: [
-        { hour: '08:00 - 09:00', target: 180, actual: 165, qcPass: 162, dhu: 2.1, downtimeMin: 5, nptProblems: [{ problem: 'BUNDLE SHORTAGE', minutes: 5 }] },
-        { hour: '09:00 - 10:00', target: 200, actual: 192, qcPass: 189, dhu: 1.8, downtimeMin: 0, nptProblems: [] },
-        { hour: '10:00 - 11:00', target: 200, actual: 174, qcPass: 168, dhu: 3.4, downtimeMin: 8, nptProblems: [{ problem: 'MACHINE PROBLEM', minutes: 8 }] },
-        { hour: '11:00 - 12:00', target: 200, actual: 205, qcPass: 202, dhu: 1.5, downtimeMin: 0, nptProblems: [] },
-        { hour: '12:00 - 01:00', target: 160, actual: 148, qcPass: 145, dhu: 2.0, downtimeMin: 4, nptProblems: [{ problem: 'RIB SHADE', minutes: 4 }] },
-        { hour: '01:00 - 02:00', target: 200, actual: 188, qcPass: 184, dhu: 1.9, downtimeMin: 2, nptProblems: [{ problem: 'INPUT DELAY', minutes: 2 }] },
-        { hour: '02:00 - 03:00', target: 200, actual: 0, qcPass: 0, dhu: 0, downtimeMin: 0, nptProblems: [] },
-        { hour: '03:00 - 04:00', target: 200, actual: 0, qcPass: 0, dhu: 0, downtimeMin: 0, nptProblems: [] },
-        { hour: '04:00 - 05:00', target: 60, actual: 0, qcPass: 0, dhu: 0, downtimeMin: 0, nptProblems: [] }
-      ]
+      hourlyRows: buildHourlyRows(1400, 6, idx)
     }
-  ]
-
-  for (let i = seedLines.length + 1; i <= totalLines; i++) {
-    const padded = String(i).padStart(2, '0')
-    const operators = 30 + ((i * 2) % 11)
-    const helpers = 4 + (i % 5)
-    const smv = Number((11.5 + ((i * 1.1) % 7.5)).toFixed(1))
-    const dailyTarget =
-      Math.max(1150, Math.round(((operators * 480 * 0.78) / smv) / 50) * 50)
-    const activeHourIndex = 6
-    const hourlyRows = buildHourlyRows(dailyTarget, activeHourIndex, i - 1)
-    const actualSum = hourlyRows.reduce((s, r) => s + r.actual, 0)
-    const gapVal = i % 4 === 0 ? 74 : 26 + (i % 32)
-    const styleType = STYLE_TYPES[i % STYLE_TYPES.length]
-    const styleNo = `STY-${3000 + i * 137}-${styleType}`
-
-    seedLines.push({
-      id: `line-${padded}`,
-      lineName: `Line ${padded}`,
-      unit: getUnitForLineIndex(i - 1),
-      isActive: true,
-      poNo: `PO-${44200 + i * 19}`,
-      styleNo,
-      itemName: ITEM_NAMES_BY_TYPE[styleType] || inferItemName(styleNo),
-      modelNo: MODELS[i % MODELS.length],
-      buyer: BUYERS[i % BUYERS.length],
-      smv,
-      operators,
-      helpers,
-      dailyTarget,
-      targetEfficiency: 75,
-      maxLineGap: 60,
-      firstMachineTotal: actualSum + gapVal,
-      activeHourIndex,
-      hourlyRows
-    })
-  }
-
-  return seedLines.map((line, idx) => ({
-    ...line,
-    isActive: line.isActive !== false,
-    hourlyRows: normalizeLineRows(line.hourlyRows, idx)
-  }))
+  })
 }
-
-const linesData = ref(createLinesData(32))
 
 // Reactive Device Display State
 const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1440)
@@ -427,25 +302,16 @@ let simTimer = null
 let toastTimer = null
 let clockTimer = null
 
-// Popup Modal State (Line Setup)
+// Popup Modal State: Select Unit -> Select Line under Unit -> Auto-add 1 row
 const isPopupOpen = ref(false)
+const excelGridRef = ref(null)
 const popupDraft = ref({
-  lineId: 'line-01',
-  lineName: 'Line 01',
   unit: 'Unit 01',
-  isActive: true,
-  poNo: '',
-  styleNo: '',
-  itemName: 'Woven Garment',
-  modelNo: 'MOD-ALPHA-V2',
-  smv: 14.0,
-  operators: 32,
-  helpers: 6,
-  dailyTarget: 1400,
-  recalcHourlyTargets: false
+  recalcHourlyTargets: false,
+  lines: []
 })
 
-// Step-by-Step QR Entry Popup State
+// Step-by-Step QR Entry & Camera State
 const isQrModalOpen = ref(false)
 const selectedQrOption = ref('')
 const isProceededToQr = ref(false)
@@ -455,6 +321,10 @@ const isQrScanned = ref(false)
 const qrScanFeedback = ref('')
 const qrScanHistory = ref([])
 const qrScannerInputRef = ref(null)
+
+const isCameraActive = ref(false)
+const cameraError = ref('')
+let html5QrScanner = null
 
 const qrEntryOut = ref({
   lineId: 'line-01',
@@ -471,6 +341,233 @@ function notify(msg) {
   toastTimer = setTimeout(() => {
     toastMessage.value = ''
   }, 2400)
+}
+
+function normalizeLineIdFromLabel(label, fallbackIdx = 0) {
+  const match = String(label || '').match(/(\d+)/)
+  if (match) {
+    return `line-${String(Number(match[1])).padStart(2, '0')}`
+  }
+  return `line-${String(fallbackIdx + 1).padStart(2, '0')}`
+}
+
+function mapSheetRowToLine(rawRow, fallbackIdx = 0, existingLine = null) {
+  const unitName = String(
+    rawRow?.Unit ??
+      rawRow?.unit ??
+      rawRow?.unitName ??
+      existingLine?.unit ??
+      getUnitForLineIndex(fallbackIdx)
+  ).trim()
+
+  const lineLabel = String(
+    rawRow?.Line_No ??
+      rawRow?.line_no ??
+      rawRow?.lineNo ??
+      rawRow?.lineName ??
+      existingLine?.lineName ??
+      `Line ${String(fallbackIdx + 1).padStart(2, '0')}`
+  ).trim()
+
+  const id = String(
+    rawRow?.id ?? rawRow?.ID ?? existingLine?.id ?? normalizeLineIdFromLabel(lineLabel, fallbackIdx)
+  ).trim()
+
+  const styleNo = String(
+    rawRow?.styleNo ?? rawRow?.style_no ?? rawRow?.Style ?? existingLine?.styleNo ?? ''
+  ).trim()
+
+  const dailyTarget =
+    Number(
+      rawRow?.dailyTarget ??
+        rawRow?.Daily_Target ??
+        rawRow?.target ??
+        existingLine?.dailyTarget ??
+        1400
+    ) || 1400
+
+  const activeHourIndex =
+    Number(rawRow?.activeHourIndex ?? existingLine?.activeHourIndex ?? 6) || 6
+
+  const hourlyRows =
+    Array.isArray(rawRow?.hourlyRows) && rawRow.hourlyRows.length > 0
+      ? normalizeLineRows(rawRow.hourlyRows, fallbackIdx)
+      : existingLine?.hourlyRows?.length
+        ? normalizeLineRows(existingLine.hourlyRows, fallbackIdx)
+        : buildHourlyRows(dailyTarget, activeHourIndex, fallbackIdx)
+
+  const actualSum = hourlyRows.reduce((s, r) => s + (Number(r.actual) || 0), 0)
+
+  return {
+    ...(existingLine || {}),
+    id,
+    unit: unitName,
+    lineName: lineLabel,
+    isActive:
+      typeof rawRow?.isActive === 'boolean'
+        ? rawRow.isActive
+        : rawRow?.Status
+          ? String(rawRow.Status).toLowerCase() !== 'deactive'
+          : existingLine?.isActive !== false,
+    poNo: String(rawRow?.poNo ?? rawRow?.PO_No ?? existingLine?.poNo ?? '').trim(),
+    styleNo,
+    itemName: String(
+      rawRow?.itemName ??
+        rawRow?.Item_name ??
+        rawRow?.Item_Name ??
+        existingLine?.itemName ??
+        inferItemName(styleNo)
+    ).trim(),
+    modelNo: String(
+      rawRow?.modelNo ?? rawRow?.Model_No ?? existingLine?.modelNo ?? 'MOD-ALPHA-V2'
+    ).trim(),
+    buyer: String(
+      rawRow?.buyer ?? rawRow?.Buyer ?? existingLine?.buyer ?? BUYERS[fallbackIdx % BUYERS.length]
+    ).trim(),
+    smv: Number(rawRow?.smv ?? rawRow?.SMV ?? existingLine?.smv ?? 14.0) || 14.0,
+    operators:
+      Number(rawRow?.operators ?? rawRow?.Operators ?? existingLine?.operators ?? 32) || 0,
+    helpers:
+      Number(rawRow?.helpers ?? rawRow?.Helpers ?? existingLine?.helpers ?? 6) || 0,
+    dailyTarget,
+    targetEfficiency:
+      Number(
+        rawRow?.targetEfficiency ??
+          rawRow?.Target_Efficiency ??
+          rawRow?.target_efficiency ??
+          existingLine?.targetEfficiency ??
+          75
+      ) || 75,
+    maxLineGap: Number(rawRow?.maxLineGap ?? existingLine?.maxLineGap ?? 60) || 60,
+    firstMachineTotal:
+      Number(
+        rawRow?.firstMachineTotal ?? existingLine?.firstMachineTotal ?? actualSum + 25
+      ) || 0,
+    activeHourIndex,
+    hourlyRows
+  }
+}
+
+async function fetchUnitLinesFromApi({ silent = false } = {}) {
+  if (!Unit_line_API?.readRecords) return []
+  isSyncingGas.value = true
+  try {
+    const records = await Unit_line_API.readRecords(UNIT_LINE_SHEET)
+    const list = Array.isArray(records) ? records : []
+
+    const validRows = list.filter(
+      (r) =>
+        r &&
+        (String(r.Unit || r.unit || '').trim() ||
+          String(r.Line_No || r.line_no || r.lineName || '').trim())
+    )
+
+    // Google Sheet is blank -> keep live board blank
+    if (validRows.length === 0) {
+      linesData.value = []
+      selectedLineId.value = 'ALL'
+      lastUpdated.value = new Date().toLocaleTimeString()
+      if (!silent) {
+        notify(`${UNIT_LINE_SHEET} is blank — live board is empty`)
+      }
+      return []
+    }
+
+    const byId = new Map(linesData.value.map((l) => [l.id, l]))
+    const byLabel = new Map(linesData.value.map((l) => [String(l.lineName).toLowerCase(), l]))
+
+    linesData.value = validRows.map((row, idx) => {
+      const candidateLabel = String(row.Line_No ?? row.line_no ?? row.lineName ?? '').trim()
+      const candidateId = String(
+        row.id ?? row.ID ?? normalizeLineIdFromLabel(candidateLabel, idx)
+      ).trim()
+      const existing = byId.get(candidateId) || byLabel.get(candidateLabel.toLowerCase()) || null
+      return mapSheetRowToLine(row, idx, existing)
+    })
+
+    lastUpdated.value = new Date().toLocaleTimeString()
+    if (!silent) {
+      notify(`Loaded ${linesData.value.length} Unit & Line rows from ${UNIT_LINE_SHEET}`)
+    }
+    return linesData.value
+  } catch (err) {
+    if (!silent) {
+      notify(`Unit/Line fetch failed: ${err.message}`)
+    }
+    return []
+  } finally {
+    isSyncingGas.value = false
+  }
+}
+
+function extractItemNameFromRow(row) {
+  if (!row || typeof row !== 'object') return ''
+  return String(
+    row.Item_name ??
+      row.Item_Name ??
+      row.itemName ??
+      row.item_name ??
+      row.Item ??
+      row.item ??
+      row.Name ??
+      row.name ??
+      ''
+  ).trim()
+}
+
+async function fetchItemsFromApi({ silent = true } = {}) {
+  const reader = item_API?.readRecords || item_API?.getRecords
+  if (typeof reader !== 'function') return itemOptions.value
+
+  try {
+    const records = await reader.call(item_API)
+    const list = Array.isArray(records)
+      ? records
+      : Array.isArray(records?.items)
+        ? records.items
+        : Array.isArray(records?.data)
+          ? records.data
+          : []
+    if (!list.length) return itemOptions.value
+
+    const seen = new Set()
+    const fetchedNames = []
+
+    list.forEach((row) => {
+      const name = typeof row === 'string' ? row.trim() : extractItemNameFromRow(row)
+      if (!name) return
+      const key = name.toLowerCase()
+      if (!seen.has(key)) {
+        seen.add(key)
+        fetchedNames.push(name)
+      }
+    })
+
+    if (fetchedNames.length > 0) {
+      itemOptions.value = fetchedNames
+
+      linesData.value.forEach((line, idx) => {
+        if (!line.itemName || line.itemName === 'Apparel Item') {
+          const matched =
+            fetchedNames.find((n) =>
+              String(line.styleNo || '').toUpperCase().includes(n.toUpperCase())
+            ) || fetchedNames[idx % fetchedNames.length]
+          if (matched) line.itemName = matched
+        }
+      })
+
+      if (!silent) {
+        notify(`Loaded ${fetchedNames.length} items from Item API`)
+      }
+    }
+
+    return itemOptions.value
+  } catch (err) {
+    if (!silent) {
+      notify(`Item fetch failed: ${err.message}`)
+    }
+    return itemOptions.value
+  }
 }
 
 async function sendToGasBackend(action, payload, { silent = false } = {}) {
@@ -499,32 +596,10 @@ async function sendToGasBackend(action, payload, { silent = false } = {}) {
 }
 
 async function hydrateFromGasBackend() {
-  if (!BACKEND_URL) return
-  isSyncingGas.value = true
-  try {
-    const params = new URLSearchParams({
-      action: 'initBoard',
-      displayMode: displayMode.value,
-      orientation: isPortrait.value ? 'portrait' : 'landscape',
-      unit: selectedUnit.value,
-      lineId: selectedLineId.value
-    })
-    const res = await fetch(`${BACKEND_URL}?${params.toString()}`, { method: 'GET' })
-    const data = await res.json()
-    if (data && data.ok && !data.isEmpty && Array.isArray(data.lines) && data.lines.length > 0) {
-      linesData.value = data.lines.map((line, idx) => ({
-        ...line,
-        isActive: line.isActive !== false,
-        hourlyRows: normalizeLineRows(line.hourlyRows, idx)
-      }))
-      lastUpdated.value = new Date().toLocaleTimeString()
-      notify('Synced from Google Apps Script')
-    }
-  } catch (_) {
-    // Keep local seed data if GAS sheet is not yet populated or unreachable
-  } finally {
-    isSyncingGas.value = false
-  }
+  await Promise.all([
+    fetchUnitLinesFromApi({ silent: false }),
+    fetchItemsFromApi({ silent: true })
+  ])
 }
 
 async function manualSyncBoardToGas() {
@@ -554,7 +629,30 @@ const unitOptions = computed(() => {
       list.push(u)
     }
   })
-  return list
+  return list.length > 0 ? list : DEFAULT_FALLBACK_UNITS
+})
+
+const lineDropdownOptions = computed(() => {
+  const source = linesData.value.length > 0 ? linesData.value : buildDefaultFallbackLines(32)
+  return source.map((line, idx) => ({
+    id: line.id,
+    lineName: line.lineName || `Line ${String(idx + 1).padStart(2, '0')}`,
+    unit: line.unit || getUnitForLineIndex(idx),
+    poNo: line.poNo || '',
+    styleNo: line.styleNo || '',
+    itemName: line.itemName || itemOptions.value[0] || inferItemName(line.styleNo),
+    smv: Number(line.smv) || 14.0,
+    operators: Number(line.operators) || 32,
+    helpers: Number(line.helpers) || 6,
+    dailyTarget: Number(line.dailyTarget) || 1400,
+    targetEfficiency: Number(line.targetEfficiency) || 75,
+    isActive: line.isActive !== false
+  }))
+})
+
+const popupUnitLineChoices = computed(() => {
+  const activeUnit = popupDraft.value.unit
+  return lineDropdownOptions.value.filter((opt) => opt.unit === activeUnit)
 })
 
 const linesInSelectedUnit = computed(() => {
@@ -564,32 +662,33 @@ const linesInSelectedUnit = computed(() => {
   )
 })
 
-const isAllLines = computed(() => selectedLineId.value === 'ALL')
+const isAllLines = computed(() => selectedLineId.value === 'ALL' || linesData.value.length === 0)
 
 const currentLine = computed(() => {
   return (
     linesData.value.find((l) => l.id === selectedLineId.value) ||
     linesInSelectedUnit.value[0] ||
-    linesData.value[0]
+    linesData.value[0] ||
+    null
   )
 })
 
 const qrTargetLine = computed(() => {
-  return linesData.value.find((l) => l.id === qrEntryOut.value.lineId) || linesData.value[0]
+  return (
+    linesData.value.find((l) => l.id === qrEntryOut.value.lineId) ||
+    linesData.value[0] || {
+      id: '',
+      lineName: 'No Line',
+      unit: popupDraft.value.unit || 'Unit 01',
+      firstMachineTotal: 0,
+      hourlyRows: []
+    }
+  )
 })
 
 const activeOptionMeta = computed(() => {
   return QR_OPTIONS.find((opt) => opt.key === selectedQrOption.value) || null
 })
-
-function toggleLineActive(lineId, forceState = null) {
-  const line = linesData.value.find((l) => l.id === lineId)
-  if (!line) return
-  line.isActive = typeof forceState === 'boolean' ? forceState : !line.isActive
-  lastUpdated.value = new Date().toLocaleTimeString()
-  notify(`${line.lineName} ${line.isActive ? 'Activated' : 'Deactivated'}`)
-  sendToGasBackend('toggleLineStatus', { id: line.id, isActive: line.isActive }, { silent: true })
-}
 
 function selectUnit(unitName) {
   selectedUnit.value = unitName
@@ -611,37 +710,161 @@ function onLineSelectChange(newLineId) {
   }
 }
 
-function loadDraftFromLineId(lineId) {
-  const idx = linesData.value.findIndex((l) => l.id === lineId)
-  const target =
-    (idx >= 0 ? linesData.value[idx] : null) ||
-    (!isAllLines.value ? currentLine.value : linesData.value[0])
-  const resolvedIdx = idx >= 0 ? idx : 0
-
-  popupDraft.value = {
-    lineId: target.id,
-    lineName: target.lineName,
-    unit: target.unit || getUnitForLineIndex(resolvedIdx),
-    isActive: target.isActive !== false,
-    poNo: target.poNo || '',
-    styleNo: target.styleNo || '',
-    itemName: target.itemName || inferItemName(target.styleNo),
-    modelNo: target.modelNo || 'MOD-ALPHA-V2',
-    smv: Number(target.smv) || 14.0,
-    operators: Number(target.operators) || 0,
-    helpers: Number(target.helpers) || 0,
-    dailyTarget: Number(target.dailyTarget) || 1200,
-    recalcHourlyTargets: false
+function createBlankUnitLineRow(unitName, lineName = '') {
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  return {
+    rowUid: `xl-row-${suffix}`,
+    lineId: '',
+    unit: unitName,
+    lineName,
+    poNo: '',
+    styleNo: '',
+    itemName: itemOptions.value[0] || 'Apparel Item',
+    smv: 14.0,
+    operators: 32,
+    helpers: 6,
+    targetEfficiency: 75,
+    dailyTarget: 1400,
+    isNewRow: true
   }
 }
 
-function openLinePopup(lineId = null) {
-  const resolvedId =
-    lineId ||
-    (!isAllLines.value
-      ? currentLine.value.id
-      : (linesInSelectedUnit.value[0] || linesData.value[0]).id)
-  loadDraftFromLineId(resolvedId)
+function appendEmptyLineRow() {
+  popupDraft.value.lines.push(createBlankUnitLineRow(popupDraft.value.unit, ''))
+}
+
+function ensureTrailingRowOnAdded(rowIdx) {
+  if (rowIdx === popupDraft.value.lines.length - 1) {
+    appendEmptyLineRow()
+  }
+}
+
+function onGridLineDropdownChange(rowIdx, pickedLineId) {
+  const row = popupDraft.value.lines[rowIdx]
+  if (!row) return
+
+  if (!pickedLineId) {
+    row.lineId = ''
+    row.lineName = ''
+    return
+  }
+
+  const matched = popupUnitLineChoices.value.find((opt) => opt.id === pickedLineId)
+  if (!matched) return
+
+  row.lineId = matched.id
+  row.lineName = matched.lineName
+  row.poNo = matched.poNo
+  row.styleNo = matched.styleNo
+  row.itemName = matched.itemName
+  row.smv = matched.smv
+  row.operators = matched.operators
+  row.helpers = matched.helpers
+  row.targetEfficiency = matched.targetEfficiency
+  row.dailyTarget = matched.dailyTarget
+
+  ensureTrailingRowOnAdded(rowIdx)
+}
+
+function focusGridCell(rowIdx, colIdx) {
+  const tableEl = excelGridRef.value
+  if (!tableEl) return
+  const rows = tableEl.querySelectorAll('tbody tr')
+  if (rowIdx < 0) return
+  if (rowIdx >= rows.length) {
+    appendEmptyLineRow()
+    nextTick(() => focusGridCell(rowIdx, colIdx))
+    return
+  }
+  const targetRow = rows[rowIdx]
+  const controls = Array.from(targetRow.querySelectorAll('input, select'))
+  if (!controls.length) return
+  const clampedCol = Math.max(0, Math.min(colIdx, controls.length - 1))
+  const el = controls[clampedCol]
+  if (el) {
+    el.focus()
+    if (el.tagName === 'INPUT' && el.type === 'text') {
+      el.select()
+    }
+  }
+}
+
+function handleExcelGridKeydown(e, rowIdx, colIdx) {
+  const key = e.key
+  if (key === 'ArrowDown' || key === 'Enter') {
+    if (e.target.tagName === 'SELECT' && key === 'ArrowDown') return
+    e.preventDefault()
+    if (rowIdx === popupDraft.value.lines.length - 1) {
+      appendEmptyLineRow()
+    }
+    nextTick(() => focusGridCell(rowIdx + 1, colIdx))
+  } else if (key === 'ArrowUp') {
+    if (e.target.tagName === 'SELECT') return
+    e.preventDefault()
+    focusGridCell(rowIdx - 1, colIdx)
+  } else if (key === 'ArrowRight') {
+    const input = e.target
+    if (input.tagName === 'INPUT' && input.type === 'text') {
+      const atEnd = input.selectionStart === input.value.length && input.selectionEnd === input.value.length
+      if (!atEnd) return
+    }
+    e.preventDefault()
+    focusGridCell(rowIdx, colIdx + 1)
+  } else if (key === 'ArrowLeft') {
+    const input = e.target
+    if (input.tagName === 'INPUT' && input.type === 'text') {
+      const atStart = input.selectionStart === 0 && input.selectionEnd === 0
+      if (!atStart) return
+    }
+    e.preventDefault()
+    focusGridCell(rowIdx, colIdx - 1)
+  }
+}
+
+function getRowItemChoices(row) {
+  const list = Array.isArray(itemOptions.value) ? [...itemOptions.value] : []
+  const currentVal = String(row?.itemName || '').trim()
+  if (currentVal && !list.some((opt) => opt.toLowerCase() === currentVal.toLowerCase())) {
+    list.unshift(currentVal)
+  }
+  return list
+}
+
+function buildUnitPopupRows(unitName) {
+  return [createBlankUnitLineRow(unitName, '')]
+}
+
+function loadPopupForUnit(unitName) {
+  const resolvedUnit = unitName || unitOptions.value[0] || 'Unit 01'
+  popupDraft.value = {
+    unit: resolvedUnit,
+    recalcHourlyTargets: false,
+    lines: buildUnitPopupRows(resolvedUnit)
+  }
+}
+
+async function openLinePopup(lineId = null) {
+  await Promise.all([
+    fetchUnitLinesFromApi({ silent: true }),
+    fetchItemsFromApi({ silent: true })
+  ])
+
+  let initialUnit = selectedUnit.value !== 'ALL' ? selectedUnit.value : null
+  if (!initialUnit && lineId) {
+    const idx = linesData.value.findIndex((l) => l.id === lineId)
+    if (idx >= 0) {
+      initialUnit = linesData.value[idx].unit || getUnitForLineIndex(idx)
+    }
+  }
+  if (!initialUnit && !isAllLines.value && currentLine.value) {
+    const idx = linesData.value.findIndex((l) => l.id === currentLine.value.id)
+    initialUnit = currentLine.value.unit || getUnitForLineIndex(idx >= 0 ? idx : 0)
+  }
+  if (!initialUnit) {
+    initialUnit = unitOptions.value[0] || 'Unit 01'
+  }
+
+  loadPopupForUnit(initialUnit)
   isPopupOpen.value = true
 }
 
@@ -649,59 +872,180 @@ function closeLinePopup() {
   isPopupOpen.value = false
 }
 
-function onPopupLineChange(newLineId) {
-  loadDraftFromLineId(newLineId)
+function onPopupUnitChange(newUnit) {
+  loadPopupForUnit(newUnit)
 }
 
-function saveLinePopup() {
-  const lineIdx = linesData.value.findIndex((l) => l.id === popupDraft.value.lineId)
-  if (lineIdx < 0) return
-  const line = linesData.value[lineIdx]
+function isRowPopulated(row) {
+  if (!row) return false
+  return Boolean(
+    String(row.lineId || '').trim() ||
+      String(row.lineName || '').trim() ||
+      String(row.poNo || '').trim() ||
+      String(row.styleNo || '').trim()
+  )
+}
 
-  const cleanLineName = String(popupDraft.value.lineName || '').trim() || line.lineName
-  const cleanUnit = String(popupDraft.value.unit || '').trim() || getUnitForLineIndex(lineIdx)
-  const cleanPo = String(popupDraft.value.poNo || '').trim() || line.poNo
-  const cleanStyle = String(popupDraft.value.styleNo || '').trim() || line.styleNo
-  const cleanItemName =
-    String(popupDraft.value.itemName || '').trim() || inferItemName(cleanStyle)
-  const cleanModel = String(popupDraft.value.modelNo || '').trim() || line.modelNo
-  const cleanSmv = Math.max(0.1, Number(popupDraft.value.smv) || line.smv)
-  const cleanOperators = Math.max(0, Math.round(Number(popupDraft.value.operators) || 0))
-  const cleanHelpers = Math.max(0, Math.round(Number(popupDraft.value.helpers) || 0))
-  const cleanTarget = Math.max(0, Math.round(Number(popupDraft.value.dailyTarget) || 0))
-
-  line.lineName = cleanLineName
-  line.unit = cleanUnit
-  line.isActive = Boolean(popupDraft.value.isActive)
-  line.poNo = cleanPo
-  line.styleNo = cleanStyle
-  line.itemName = cleanItemName
-  line.modelNo = cleanModel
-  line.smv = cleanSmv
-  line.operators = cleanOperators
-  line.helpers = cleanHelpers
-  line.dailyTarget = cleanTarget
-
-  if (popupDraft.value.recalcHourlyTargets) {
-    let remaining = cleanTarget
-    line.hourlyRows.forEach((row, idx) => {
-      const slot = BASE_HOURS[idx] || { ratio: 1 / line.hourlyRows.length }
-      const isLast = idx === line.hourlyRows.length - 1
-      const nextTarget = isLast
-        ? Math.max(0, remaining)
-        : Math.round(cleanTarget * slot.ratio)
-      remaining -= nextTarget
-      row.target = nextTarget
-    })
+const popupTotals = computed(() => {
+  const rows = (popupDraft.value.lines || []).filter(isRowPopulated)
+  const operators = rows.reduce((s, r) => s + (Number(r.operators) || 0), 0)
+  const helpers = rows.reduce((s, r) => s + (Number(r.helpers) || 0), 0)
+  const dailyTarget = rows.reduce((s, r) => s + (Number(r.dailyTarget) || 0), 0)
+  const avgTargetEff = rows.length
+    ? (
+        rows.reduce((s, r) => s + (Number(r.targetEfficiency) || 75), 0) / rows.length
+      ).toFixed(1)
+    : '75.0'
+  return {
+    totalLines: rows.length,
+    operators,
+    helpers,
+    manpower: operators + helpers,
+    dailyTarget,
+    avgTargetEff
   }
+})
+
+function saveLinePopup() {
+  const targetUnit = String(popupDraft.value.unit || '').trim() || 'Unit 01'
+  const populatedRows = popupDraft.value.lines.filter(isRowPopulated)
+  const updatedLines = []
+
+  populatedRows.forEach((draftRow, rowIdx) => {
+    const cleanLineName =
+      String(draftRow.lineName || '').trim() || `Line ${String(rowIdx + 1).padStart(2, '0')}`
+    const cleanPo = String(draftRow.poNo || '').trim()
+    const cleanStyle = String(draftRow.styleNo || '').trim()
+    const cleanItemName =
+      String(draftRow.itemName || '').trim() || itemOptions.value[0] || inferItemName(cleanStyle)
+    const cleanSmv = Math.max(0.1, Number(draftRow.smv) || 14.0)
+    const cleanOperators = Math.max(0, Math.round(Number(draftRow.operators) || 0))
+    const cleanHelpers = Math.max(0, Math.round(Number(draftRow.helpers) || 0))
+    const cleanTargetEff = Math.max(1, Math.min(100, Number(draftRow.targetEfficiency) || 75))
+    const cleanTarget = Math.max(0, Math.round(Number(draftRow.dailyTarget) || 0))
+
+    let lineIdx = draftRow.lineId
+      ? linesData.value.findIndex((l) => l.id === draftRow.lineId)
+      : -1
+    if (lineIdx < 0) {
+      lineIdx = linesData.value.findIndex(
+        (l) => String(l.lineName || '').toLowerCase() === cleanLineName.toLowerCase()
+      )
+    }
+
+    let line
+    if (lineIdx >= 0) {
+      line = linesData.value[lineIdx]
+    } else {
+      const globalIdx = linesData.value.length
+      line = {
+        id: draftRow.lineId || `line-${String(globalIdx + 1).padStart(2, '0')}`,
+        lineName: cleanLineName,
+        unit: targetUnit,
+        isActive: true,
+        poNo: cleanPo,
+        styleNo: cleanStyle,
+        itemName: cleanItemName,
+        modelNo: MODELS[globalIdx % MODELS.length],
+        buyer: BUYERS[globalIdx % BUYERS.length],
+        smv: cleanSmv,
+        operators: cleanOperators,
+        helpers: cleanHelpers,
+        targetEfficiency: cleanTargetEff,
+        dailyTarget: cleanTarget,
+        maxLineGap: 60,
+        firstMachineTotal: 0,
+        activeHourIndex: 6,
+        hourlyRows: buildHourlyRows(cleanTarget, 6, globalIdx)
+      }
+      linesData.value.push(line)
+      lineIdx = linesData.value.length - 1
+    }
+
+    line.unit = targetUnit
+    line.lineName = cleanLineName
+    line.isActive = true
+    line.poNo = cleanPo
+    line.styleNo = cleanStyle
+    line.itemName = cleanItemName
+    line.smv = cleanSmv
+    line.operators = cleanOperators
+    line.helpers = cleanHelpers
+    line.targetEfficiency = cleanTargetEff
+    line.dailyTarget = cleanTarget
+
+    if (popupDraft.value.recalcHourlyTargets) {
+      let remaining = cleanTarget
+      line.hourlyRows.forEach((row, idx) => {
+        const slot = BASE_HOURS[idx] || { ratio: 1 / line.hourlyRows.length }
+        const isLast = idx === line.hourlyRows.length - 1
+        const nextTarget = isLast
+          ? Math.max(0, remaining)
+          : Math.round(cleanTarget * slot.ratio)
+        remaining -= nextTarget
+        row.target = nextTarget
+      })
+    }
+
+    updatedLines.push(JSON.parse(JSON.stringify(line)))
+  })
 
   lastUpdated.value = new Date().toLocaleTimeString()
   isPopupOpen.value = false
-  notify(`${line.lineName} (${line.isActive ? 'Active' : 'Deactive'}) saved`)
-  sendToGasBackend('saveLineSetup', JSON.parse(JSON.stringify(line)))
+  notify(`${targetUnit} (${updatedLines.length} lines) saved`)
+  sendToGasBackend('syncBoardSnapshot', { lines: updatedLines })
 }
 
-function resetQrFlowState(keepOption = false) {
+async function stopQrCamera() {
+  isCameraActive.value = false
+  if (html5QrScanner) {
+    try {
+      if (html5QrScanner.isScanning) {
+        await html5QrScanner.stop()
+      }
+      await html5QrScanner.clear()
+    } catch (_) {
+      // Ignore cleanup errors if already stopped
+    }
+    html5QrScanner = null
+  }
+}
+
+async function startQrCamera() {
+  cameraError.value = ''
+  if (!navigator?.mediaDevices?.getUserMedia) {
+    cameraError.value = 'Camera API unavailable. Use HTTPS/localhost or type/scan manually.'
+    return
+  }
+
+  await stopQrCamera()
+  await nextTick()
+
+  try {
+    html5QrScanner = new Html5Qrcode('qr-camera-reader')
+    isCameraActive.value = true
+
+    await html5QrScanner.start(
+      { facingMode: 'environment' },
+      { fps: 10, qrbox: { width: 220, height: 220 } },
+      async (decodedText) => {
+        qrScanInput.value = decodedText
+        await stopQrCamera()
+        confirmQrScan(decodedText)
+      },
+      () => {
+        // Ignore per-frame scan misses while searching
+      }
+    )
+  } catch (err) {
+    isCameraActive.value = false
+    cameraError.value = `Could not start camera: ${err?.message || 'Permission denied'}`
+  }
+}
+
+async function resetQrFlowState(keepOption = false) {
+  await stopQrCamera()
+  cameraError.value = ''
   if (!keepOption) {
     selectedQrOption.value = ''
     isProceededToQr.value = false
@@ -719,12 +1063,12 @@ function resetQrFlowState(keepOption = false) {
   }
 }
 
-function openQrEntryPopup() {
+async function openQrEntryPopup() {
   const defaultLine = !isAllLines.value
     ? currentLine.value
     : linesInSelectedUnit.value[0] || linesData.value[0]
 
-  resetQrFlowState(false)
+  await resetQrFlowState(false)
   qrEntryOut.value = {
     lineId: defaultLine?.id || 'line-01',
     hourIndex: Math.min(Math.max(0, defaultLine?.activeHourIndex ?? 6), 8),
@@ -736,12 +1080,14 @@ function openQrEntryPopup() {
   isQrModalOpen.value = true
 }
 
-function closeQrEntryPopup() {
+async function closeQrEntryPopup() {
   isQrModalOpen.value = false
-  resetQrFlowState(false)
+  await resetQrFlowState(false)
 }
 
-function onQrOptionDropdownChange(optionKey) {
+async function onQrOptionDropdownChange(optionKey) {
+  await stopQrCamera()
+  cameraError.value = ''
   selectedQrOption.value = optionKey
   const meta = QR_OPTIONS.find((o) => o.key === optionKey)
   qrEntryOut.value.station = meta?.defaultStation || ''
@@ -793,7 +1139,7 @@ function parseQrPayload(rawText) {
   return { raw: clean, lineId, qty }
 }
 
-function confirmQrScan(overrideCode = '') {
+async function confirmQrScan(overrideCode = '') {
   if (!selectedQrOption.value) {
     qrScanFeedback.value = 'Please select a QR Code Option first.'
     return
@@ -807,6 +1153,10 @@ function confirmQrScan(overrideCode = '') {
   if (!rawCode) {
     qrScanFeedback.value = 'Scan or enter a QR code first to show Output Entry.'
     return
+  }
+
+  if (isCameraActive.value) {
+    await stopQrCamera()
   }
 
   const parsed = parseQrPayload(rawCode)
@@ -963,9 +1313,13 @@ function onHourlyDowntimeChange(line, rowIndex) {
 
 function computeLineMetrics(line, index = 0) {
   const isActive = line.isActive !== false
-  const activeIdx = line.activeHourIndex
-  const totalActual = line.hourlyRows.reduce((sum, r) => sum + (Number(r.actual) || 0), 0)
-  const totalQcPass = line.hourlyRows.reduce((sum, r) => {
+  const activeIdx = line.activeHourIndex ?? 6
+  const hourlyRows = Array.isArray(line.hourlyRows) ? line.hourlyRows : []
+  const smv = Number(line.smv) || 14.0
+  const dailyTarget = Number(line.dailyTarget) || 0
+
+  const totalActual = hourlyRows.reduce((sum, r) => sum + (Number(r.actual) || 0), 0)
+  const totalQcPass = hourlyRows.reduce((sum, r) => {
     const fallback = calcHourQcPass(r.actual, r.dhu)
     const val = typeof r.qcPass === 'number' && !Number.isNaN(r.qcPass) ? r.qcPass : fallback
     return sum + Math.min(Number(r.actual) || 0, Math.max(0, Math.round(val)))
@@ -976,25 +1330,24 @@ function computeLineMetrics(line, index = 0) {
     totalActual > 0 ? ((lastToQcVariance / totalActual) * 100).toFixed(1) : '0.0'
 
   const totalNptMin = isActive
-    ? line.hourlyRows.reduce((sum, r) => sum + Math.max(0, Number(r.downtimeMin) || 0), 0)
+    ? hourlyRows.reduce((sum, r) => sum + Math.max(0, Number(r.downtimeMin) || 0), 0)
     : 0
-  const nptProblemsSummary = isActive ? aggregateProblemsFromRows(line.hourlyRows) : []
-  const nptLossPcs = calcNptLossPcs(totalNptMin, line.smv)
+  const nptProblemsSummary = isActive ? aggregateProblemsFromRows(hourlyRows) : []
+  const nptLossPcs = calcNptLossPcs(totalNptMin, smv)
 
   const elapsedTarget = isActive
-    ? line.hourlyRows.slice(0, activeIdx + 1).reduce((sum, r) => sum + r.target, 0)
+    ? hourlyRows.slice(0, activeIdx + 1).reduce((sum, r) => sum + (Number(r.target) || 0), 0)
     : 0
   const netVariance = totalActual - elapsedTarget
-  const effectiveDailyTarget = isActive ? line.dailyTarget : 0
-  const remainingToLineTarget = Math.max(0, effectiveDailyTarget - totalActual)
+  const effectiveDailyTarget = isActive ? dailyTarget : 0
 
   const activeOperators = isActive ? Number(line.operators) || 0 : 0
   const activeHelpers = isActive ? Number(line.helpers) || 0 : 0
   const totalManpower = Math.max(1, activeOperators + activeHelpers)
-  const effectiveFirstMachine = Math.max(line.firstMachineTotal, totalActual)
+  const effectiveFirstMachine = Math.max(Number(line.firstMachineTotal) || 0, totalActual)
   const machineGap = Math.max(0, effectiveFirstMachine - totalActual)
-  const gapMinutes = Math.round(machineGap * line.smv)
-  const isGapAlert = isActive && machineGap > line.maxLineGap
+  const gapMinutes = Math.round(machineGap * smv)
+  const isGapAlert = isActive && machineGap > (Number(line.maxLineGap) || 60)
 
   const completionPct = effectiveDailyTarget
     ? Math.min(100, Math.round((totalActual / effectiveDailyTarget) * 100))
@@ -1002,7 +1355,7 @@ function computeLineMetrics(line, index = 0) {
 
   const activeHoursCount = activeIdx + 1
   const totalAvailableMins = activeHoursCount * totalManpower * 60
-  const totalEarnedMins = totalActual * line.smv
+  const totalEarnedMins = totalActual * smv
   const nptPctStr =
     isActive && totalAvailableMins
       ? (((totalNptMin * totalManpower) / totalAvailableMins) * 100).toFixed(1)
@@ -1012,17 +1365,21 @@ function computeLineMetrics(line, index = 0) {
       ? ((totalEarnedMins / totalAvailableMins) * 100).toFixed(1)
       : '0.0'
 
-  const reported = line.hourlyRows.filter((r) => r.actual > 0)
+  const reported = hourlyRows.filter((r) => (Number(r.actual) || 0) > 0)
   const avgDhu = reported.length
-    ? (reported.reduce((sum, r) => sum + r.dhu, 0) / reported.length).toFixed(1)
+    ? (reported.reduce((sum, r) => sum + (Number(r.dhu) || 0), 0) / reported.length).toFixed(1)
     : '0.0'
 
   return {
     ...line,
+    smv,
+    dailyTarget,
+    hourlyRows,
     isActive,
     activeOperators,
     activeHelpers,
     effectiveDailyTarget,
+    targetEfficiency: Number(line.targetEfficiency) || 75,
     unit: line.unit || getUnitForLineIndex(index),
     itemName: line.itemName || inferItemName(line.styleNo),
     totalManpower,
@@ -1042,7 +1399,6 @@ function computeLineMetrics(line, index = 0) {
     gapMinutes,
     isGapAlert,
     completionPct,
-    remainingToLineTarget,
     totalActual,
     elapsedTarget,
     netVariance,
@@ -1123,7 +1479,12 @@ function buildUnitSubtotalRow(unitName, unitLines) {
     ? Math.min(100, Math.round((actualSum / dailyTargetSum) * 100))
     : 0
   const targetEffAvg = lineCount
-    ? activeUnitLines.reduce((s, l) => s + l.targetEfficiency, 0) / lineCount
+    ? Number(
+        (
+          activeUnitLines.reduce((s, l) => s + (Number(l.targetEfficiency) || 75), 0) /
+          lineCount
+        ).toFixed(1)
+      )
     : 75
 
   return {
@@ -1152,7 +1513,8 @@ function buildUnitSubtotalRow(unitName, unitLines) {
     isGapAlert: activeUnitLines.some((l) => l.isGapAlert),
     efficiency: effNum,
     efficiencyStr: effNum.toFixed(1),
-    targetEfficiency: targetEffAvg
+    targetEfficiency: targetEffAvg,
+    targetEfficiencyStr: targetEffAvg.toFixed(1)
   }
 }
 
@@ -1201,28 +1563,32 @@ const activeLinesCount = computed(() => activeScopedMetrics.value.length)
 const alertLinesCount = computed(() => activeScopedMetrics.value.filter((l) => l.isGapAlert).length)
 
 const currentLineMetrics = computed(() => {
+  if (!currentLine.value) return null
   const idx = linesData.value.findIndex((l) => l.id === currentLine.value.id)
   return computeLineMetrics(currentLine.value, idx >= 0 ? idx : 0)
 })
 
 const totalOperators = computed(() => {
+  if (!currentLineMetrics.value) return 0
   if (!isAllLines.value) return currentLineMetrics.value.activeOperators
   return activeScopedMetrics.value.reduce((s, l) => s + l.activeOperators, 0)
 })
 
 const totalHelpers = computed(() => {
+  if (!currentLineMetrics.value) return 0
   if (!isAllLines.value) return currentLineMetrics.value.activeHelpers
   return activeScopedMetrics.value.reduce((s, l) => s + l.activeHelpers, 0)
 })
 
 const computedRows = computed(() => {
   const line = currentLine.value
+  if (!line || !currentLineMetrics.value) return []
   const manpower = currentLineMetrics.value.totalManpower
   let cumulativeTarget = 0
   let cumulativeActual = 0
   let cumulativeQcPass = 0
 
-  return line.hourlyRows.map((row, idx) => {
+  return (line.hourlyRows || []).map((row, idx) => {
     const cleanActual = Math.max(0, Math.round(Number(row.actual) || 0))
     const cleanQcPass = Math.min(
       cleanActual,
@@ -1279,27 +1645,32 @@ const computedRows = computed(() => {
 })
 
 const totalNptMinutes = computed(() => {
+  if (!currentLineMetrics.value) return 0
   if (!isAllLines.value) return currentLineMetrics.value.totalNptMin
   return activeScopedMetrics.value.reduce((sum, l) => sum + l.totalNptMin, 0)
 })
 
 const totalNptLossPcs = computed(() => {
+  if (!currentLineMetrics.value) return 0
   if (!isAllLines.value) return currentLineMetrics.value.nptLossPcs
   const sum = activeScopedMetrics.value.reduce((acc, l) => acc + (Number(l.nptLossPcs) || 0), 0)
   return Number(sum.toFixed(1))
 })
 
 const overallNptProblemsSummary = computed(() => {
+  if (!currentLineMetrics.value) return []
   if (!isAllLines.value) return currentLineMetrics.value.nptProblemsSummary
   return mergeProblemSummaries(activeScopedMetrics.value.map((l) => l.nptProblemsSummary))
 })
 
 const totalActual = computed(() => {
+  if (!currentLineMetrics.value) return 0
   if (!isAllLines.value) return currentLineMetrics.value.totalActual
   return scopedLineMetrics.value.reduce((sum, l) => sum + l.totalActual, 0)
 })
 
 const totalQcPass = computed(() => {
+  if (!currentLineMetrics.value) return 0
   if (!isAllLines.value) return currentLineMetrics.value.totalQcPass
   return scopedLineMetrics.value.reduce((sum, l) => sum + l.totalQcPass, 0)
 })
@@ -1317,26 +1688,31 @@ const overallQcVarianceRate = computed(() =>
 )
 
 const totalFirstMachine = computed(() => {
+  if (!currentLineMetrics.value) return 0
   if (!isAllLines.value) return currentLineMetrics.value.effectiveFirstMachine
   return scopedLineMetrics.value.reduce((sum, l) => sum + l.effectiveFirstMachine, 0)
 })
 
 const totalMachineGap = computed(() => {
+  if (!currentLineMetrics.value) return 0
   if (!isAllLines.value) return currentLineMetrics.value.machineGap
   return scopedLineMetrics.value.reduce((sum, l) => sum + l.machineGap, 0)
 })
 
 const totalGapMinutes = computed(() => {
+  if (!currentLineMetrics.value) return 0
   if (!isAllLines.value) return currentLineMetrics.value.gapMinutes
   return scopedLineMetrics.value.reduce((sum, l) => sum + l.gapMinutes, 0)
 })
 
 const totalDailyTarget = computed(() => {
+  if (!currentLineMetrics.value) return 0
   if (!isAllLines.value) return currentLineMetrics.value.effectiveDailyTarget
   return activeScopedMetrics.value.reduce((sum, l) => sum + l.effectiveDailyTarget, 0)
 })
 
 const elapsedTarget = computed(() => {
+  if (!currentLineMetrics.value) return 0
   if (!isAllLines.value) return currentLineMetrics.value.elapsedTarget
   return activeScopedMetrics.value.reduce((sum, l) => sum + l.elapsedTarget, 0)
 })
@@ -1344,6 +1720,7 @@ const elapsedTarget = computed(() => {
 const netVariance = computed(() => totalActual.value - elapsedTarget.value)
 
 const overallEfficiency = computed(() => {
+  if (!currentLineMetrics.value) return '0.0'
   if (!isAllLines.value) return currentLineMetrics.value.efficiencyStr
   let earned = 0
   let available = 0
@@ -1355,15 +1732,17 @@ const overallEfficiency = computed(() => {
 })
 
 const targetEfficiency = computed(() => {
-  if (!isAllLines.value) return currentLine.value.targetEfficiency
+  if (!currentLineMetrics.value) return 75
+  if (!isAllLines.value) return Number(currentLine.value?.targetEfficiency) || 75
   if (!activeScopedMetrics.value.length) return 75
   const avg =
-    activeScopedMetrics.value.reduce((sum, l) => sum + l.targetEfficiency, 0) /
+    activeScopedMetrics.value.reduce((sum, l) => sum + (Number(l.targetEfficiency) || 75), 0) /
     activeScopedMetrics.value.length
   return Math.round(avg)
 })
 
 const avgDhu = computed(() => {
+  if (!currentLineMetrics.value) return '0.0'
   if (!isAllLines.value) return currentLineMetrics.value.avgDhuStr
   const activeLines = activeScopedMetrics.value.filter((l) => l.totalActual > 0)
   if (!activeLines.length) return '0.0'
@@ -1371,7 +1750,7 @@ const avgDhu = computed(() => {
 })
 
 function getActiveScopeTargets() {
-  if (!isAllLines.value) {
+  if (!isAllLines.value && currentLine.value) {
     return currentLine.value.isActive !== false ? [currentLine.value] : []
   }
   if (selectedUnit.value === 'ALL') {
@@ -1517,7 +1896,7 @@ function handleGlobalKeydown(e) {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   updateViewportSize()
   const nowStr = new Date().toLocaleTimeString()
   lastUpdated.value = nowStr
@@ -1528,10 +1907,11 @@ onMounted(() => {
   window.addEventListener('resize', updateViewportSize, { passive: true })
   window.addEventListener('orientationchange', updateViewportSize, { passive: true })
   window.addEventListener('keydown', handleGlobalKeydown)
-  hydrateFromGasBackend()
+  await hydrateFromGasBackend()
 })
 
 onUnmounted(() => {
+  stopQrCamera()
   clearInterval(simTimer)
   clearTimeout(toastTimer)
   clearInterval(clockTimer)
@@ -1573,27 +1953,22 @@ onUnmounted(() => {
             }}
           </option>
           <option v-for="line in scopedLineMetrics" :key="line.id" :value="line.id">
-            {{ line.lineName }} ({{ line.isActive ? 'Active' : 'Deactive' }})
+            {{ line.lineName }}
           </option>
         </select>
 
         <input v-if="isAllLines" v-model="searchQuery" type="search" aria-label="Search PO, Style, Item, Line or Buyer"
           placeholder="Search PO, Style, Item, Line..." class="search-input" />
 
-        <button v-if="!isAllLines" type="button" class="act-btn"
-          :class="currentLine.isActive !== false ? 'act-deactive' : 'act-activate'"
-          @click="toggleLineActive(currentLine.id)">
-          {{ currentLine.isActive !== false ? 'Deactivate Line' : 'Activate Line' }}
-        </button>
-
-        <button v-if="!isAllLines" type="button" class="pill-btn" @click="openLinePopup(currentLine.id)">
-          Edit {{ currentLine.lineName }} Setup
+        <button v-if="!isAllLines && currentLine" type="button" class="pill-btn"
+          @click="openLinePopup(currentLine.id)">
+          Edit {{ currentLine.unit }} Lines
         </button>
       </div>
 
       <div class="header-actions">
         <button type="button" class="btn btn-popup" @click="openLinePopup()">
-          + Line / PO / Manpower Popup
+          + Unit &amp; Lines Popup
         </button>
         <button type="button" class="btn btn-qr" @click="openQrEntryPopup">
           QR Entry Forms
@@ -1624,6 +1999,7 @@ onUnmounted(() => {
       <div class="header-left">
         <div class="status-strip">
           <span class="chip">Line Target: {{ totalDailyTarget.toLocaleString() }} pcs</span>
+          <span class="chip">Target Eff: {{ targetEfficiency }}%</span>
           <span class="chip chip-qc">
             QC Pass: {{ totalQcPass.toLocaleString() }} pcs ({{ overallQcPassRate }}%)
           </span>
@@ -1643,21 +2019,28 @@ onUnmounted(() => {
               ? selectedUnit === 'ALL'
                 ? `Line-Wise Production Live Board (${linesData.length} Lines · ${LINES_PER_UNIT} Lines/Unit)`
                 : `${selectedUnit} — Line-Wise Production Live Board (${scopedLineMetrics.length} Lines)`
-              : `${currentLine.lineName} (${currentLine.unit}) — Hourly Production & Setup Board`
+              : `${currentLine?.lineName || ''} (${currentLine?.unit || ''}) — Hourly Production & Setup Board`
           }}
         </h1>
 
         <p class="board-subtitle">
           <template v-if="isAllLines">
-            Active <strong>{{ activeLinesCount }}/{{ scopedLineMetrics.length }}</strong> lines · Target
-            <strong>{{ totalDailyTarget.toLocaleString() }} pcs</strong> · NPT
-            <strong>{{ totalNptMinutes.toLocaleString() }} min</strong> · QC Pass
-            <strong>{{ totalQcPass.toLocaleString() }} pcs</strong> · Updated {{ lastUpdated }}
+            <template v-if="linesData.length === 0">
+              Google Sheet (<strong>{{ UNIT_LINE_SHEET }}</strong>) is blank — click
+              <strong>+ Unit &amp; Lines Popup</strong> to enter lines · Updated {{ lastUpdated }}
+            </template>
+            <template v-else>
+              Active <strong>{{ activeLinesCount }}/{{ scopedLineMetrics.length }}</strong> lines · Target Eff
+              <strong>{{ targetEfficiency }}%</strong> · Target
+              <strong>{{ totalDailyTarget.toLocaleString() }} pcs</strong> · NPT
+              <strong>{{ totalNptMinutes.toLocaleString() }} min</strong> · QC Pass
+              <strong>{{ totalQcPass.toLocaleString() }} pcs</strong> · Updated {{ lastUpdated }}
+            </template>
           </template>
-          <template v-else>
+          <template v-else-if="currentLine && currentLineMetrics">
             <strong>{{ currentLine.unit }}</strong> · Item <strong>{{ currentLine.itemName }}</strong> · PO
             <strong>{{ currentLine.poNo }}</strong> · Style <strong>{{ currentLine.styleNo }}</strong> · SMV
-            <strong>{{ currentLine.smv }}m</strong> · Updated {{ lastUpdated }}
+            <strong>{{ currentLine.smv }}m</strong> · Target Eff <strong>{{ currentLineMetrics.targetEfficiency }}%</strong> · Updated {{ lastUpdated }}
           </template>
         </p>
       </div>
@@ -1668,15 +2051,15 @@ onUnmounted(() => {
       </div>
     </header>
 
-    <!-- Line / PO / Manpower Popup Modal -->
+    <!-- Single-Unit Header + Excel Grid Table Popup Modal -->
     <div v-if="isPopupOpen" class="modal-backdrop" role="dialog" aria-modal="true"
       aria-labelledby="line-setup-popup-title" @click.self="closeLinePopup">
-      <div class="modal-card">
+      <div class="modal-card unit-popup-card">
         <div class="modal-head">
           <div>
-            <span class="modal-badge">UNIT &amp; LINE ENTRY POPUP</span>
+            <span class="modal-badge">UNIT → LINE ENTRY · AUTO +1 ROW</span>
             <h2 id="line-setup-popup-title" class="modal-title">
-              Unit, Line, Status, PO No, Style, Item Name, SMV &amp; Manpower Entry
+              Select Unit → Select Line Under Unit → Auto Add Next Row
             </h2>
           </div>
           <button type="button" class="modal-close-btn" aria-label="Close popup" @click="closeLinePopup">
@@ -1685,80 +2068,104 @@ onUnmounted(() => {
         </div>
 
         <form class="modal-form" @submit.prevent="saveLinePopup">
-          <div class="modal-grid-3">
-            <label class="field-group">
-              <span>Select Line (01–32)</span>
-              <select :value="popupDraft.lineId" class="form-select" @change="onPopupLineChange($event.target.value)">
-                <option v-for="l in allLineMetrics" :key="l.id" :value="l.id">
-                  {{ l.lineName }}
-                </option>
-              </select>
-            </label>
-
-            <label class="field-group">
-              <span>Unit (8 Lines / Unit)</span>
-              <select v-model="popupDraft.unit" class="form-select" required>
+          <!-- Step 1: Unit Header -->
+          <div class="popup-unit-head-bar">
+            <label class="field-group popup-unit-select-wrap">
+              <span class="popup-unit-label">Unit:-</span>
+              <select :value="popupDraft.unit" class="form-select popup-unit-select"
+                @change="onPopupUnitChange($event.target.value)">
                 <option v-for="u in unitOptions" :key="u" :value="u">
                   {{ u }}
                 </option>
               </select>
             </label>
 
-            <label class="field-group">
-              <span>Line Status</span>
-              <select v-model="popupDraft.isActive" class="form-select">
-                <option :value="true">Active</option>
-                <option :value="false">Deactive</option>
-              </select>
-            </label>
+            <div class="popup-unit-meta">
+              <span class="unit-badge unit-badge-sm">{{ popupDraft.unit }}</span>
+              <span class="muted-sm">
+                {{ popupUnitLineChoices.length }} Lines in {{ popupDraft.unit }} ·
+                Entered: <strong>{{ popupTotals.totalLines }}</strong> ·
+                Target Eff <strong>{{ popupTotals.avgTargetEff }}%</strong> ·
+                <strong>{{ popupTotals.manpower }}</strong> Manpower ·
+                <strong>{{ popupTotals.dailyTarget.toLocaleString() }}</strong> pcs
+              </span>
+            </div>
           </div>
 
-          <div class="modal-grid-3">
-            <label class="field-group">
-              <span>Line Label</span>
-              <input v-model="popupDraft.lineName" type="text" class="form-input" placeholder="e.g. Line 01" required />
-            </label>
-
-            <label class="field-group">
-              <span>PO No</span>
-              <input v-model="popupDraft.poNo" type="text" class="form-input" placeholder="e.g. PO-44102" required />
-            </label>
-
-            <label class="field-group">
-              <span>Style</span>
-              <input v-model="popupDraft.styleNo" type="text" class="form-input" placeholder="e.g. STY-7710-WVN"
-                required />
-            </label>
-          </div>
-
-          <div class="modal-grid-2">
-            <label class="field-group">
-              <span>Item Name</span>
-              <input v-model="popupDraft.itemName" type="text" class="form-input"
-                placeholder="e.g. Woven Garment, Knit Garment, Pant" required />
-            </label>
-
-            <label class="field-group">
-              <span>SMV (Minutes)</span>
-              <input v-model.number="popupDraft.smv" type="number" min="0.1" step="0.1" class="form-input" required />
-            </label>
-          </div>
-
-          <div class="modal-grid-3">
-            <label class="field-group">
-              <span>Operator Count</span>
-              <input v-model.number="popupDraft.operators" type="number" min="0" class="form-input" required />
-            </label>
-
-            <label class="field-group">
-              <span>Helper Count</span>
-              <input v-model.number="popupDraft.helpers" type="number" min="0" class="form-input" required />
-            </label>
-
-            <label class="field-group">
-              <span>Daily Target (pcs)</span>
-              <input v-model.number="popupDraft.dailyTarget" type="number" min="0" step="50" class="form-input" />
-            </label>
+          <!-- Scrollable Excel-Style Grid Table Inside Popup -->
+          <div class="excel-sheet-wrap">
+            <table ref="excelGridRef" class="excel-sheet-table" role="grid">
+              <thead>
+                <tr>
+                  <th class="xl-corner-th">#</th>
+                  <th>Line ({{ popupDraft.unit }})</th>
+                  <th>PO No</th>
+                  <th>Style</th>
+                  <th>Item Name</th>
+                  <th>SMV</th>
+                  <th>Op</th>
+                  <th>Hlp</th>
+                  <th>Target Eff %</th>
+                  <th>Target</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(row, rIdx) in popupDraft.lines" :key="row.rowUid">
+                  <td class="xl-row-num">{{ rIdx + 1 }}</td>
+                  <td class="xl-cell">
+                    <select :value="row.lineId" aria-label="Select Line under Unit" class="xl-select xl-w-line"
+                      @change="onGridLineDropdownChange(rIdx, $event.target.value)"
+                      @keydown="handleExcelGridKeydown($event, rIdx, 0)">
+                      <option value="">-- Select Line --</option>
+                      <option v-for="opt in popupUnitLineChoices" :key="opt.id" :value="opt.id">
+                        {{ opt.lineName }}
+                      </option>
+                    </select>
+                  </td>
+                  <td class="xl-cell">
+                    <input v-model="row.poNo" type="text" class="xl-input xl-w-po" placeholder="PO-44102"
+                      @keydown="handleExcelGridKeydown($event, rIdx, 1)" />
+                  </td>
+                  <td class="xl-cell">
+                    <input v-model="row.styleNo" type="text" class="xl-input xl-w-style" placeholder="STY-7710-WVN"
+                      @keydown="handleExcelGridKeydown($event, rIdx, 2)" />
+                  </td>
+                  <td class="xl-cell">
+                    <select v-model="row.itemName" aria-label="Item Name" class="xl-select xl-w-item"
+                      @keydown="handleExcelGridKeydown($event, rIdx, 3)">
+                      <option v-for="item in getRowItemChoices(row)" :key="item" :value="item">
+                        {{ item }}
+                      </option>
+                    </select>
+                  </td>
+                  <td class="xl-cell">
+                    <input v-model.number="row.smv" type="number" min="0.1" step="0.1"
+                      class="xl-input xl-num xl-w-smv"
+                      @keydown="handleExcelGridKeydown($event, rIdx, 4)" />
+                  </td>
+                  <td class="xl-cell">
+                    <input v-model.number="row.operators" type="number" min="0"
+                      class="xl-input xl-num xl-w-op"
+                      @keydown="handleExcelGridKeydown($event, rIdx, 5)" />
+                  </td>
+                  <td class="xl-cell">
+                    <input v-model.number="row.helpers" type="number" min="0"
+                      class="xl-input xl-num xl-w-hlp"
+                      @keydown="handleExcelGridKeydown($event, rIdx, 6)" />
+                  </td>
+                  <td class="xl-cell">
+                    <input v-model.number="row.targetEfficiency" type="number" min="1" max="100" step="0.5"
+                      class="xl-input xl-num xl-w-eff"
+                      @keydown="handleExcelGridKeydown($event, rIdx, 7)" />
+                  </td>
+                  <td class="xl-cell">
+                    <input v-model.number="row.dailyTarget" type="number" min="0" step="50"
+                      class="xl-input xl-num xl-w-target"
+                      @keydown="handleExcelGridKeydown($event, rIdx, 8)" />
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
 
           <label class="modal-checkbox">
@@ -1768,19 +2175,19 @@ onUnmounted(() => {
 
           <div class="modal-summary-bar">
             <span>
-              <strong>{{ popupDraft.isActive ? 'Active' : 'Deactive' }}</strong> ·
-              <strong>{{ popupDraft.unit }}</strong> · Manpower:
-              <strong>{{ (Number(popupDraft.operators) || 0) + (Number(popupDraft.helpers) || 0) }}</strong>
+              Unit: <strong>{{ popupDraft.unit }}</strong> · Rows Entered:
+              <strong>{{ popupTotals.totalLines }}</strong> · Avg Target Eff:
+              <strong>{{ popupTotals.avgTargetEff }}%</strong> · Manpower:
+              <strong>{{ popupTotals.operators }} Op / {{ popupTotals.helpers }} Hlp ({{ popupTotals.manpower }})</strong>
             </span>
             <span>
-              Item: <strong>{{ popupDraft.itemName || '—' }}</strong> · PO:
-              <strong>{{ popupDraft.poNo || '—' }}</strong>
+              Total Target: <strong>{{ popupTotals.dailyTarget.toLocaleString() }} pcs</strong>
             </span>
           </div>
 
           <div class="modal-footer">
             <button type="button" class="btn btn-outline" @click="closeLinePopup">Cancel</button>
-            <button type="submit" class="btn btn-primary">Save Line Entry</button>
+            <button type="submit" class="btn btn-primary">Save {{ popupDraft.unit }} Lines</button>
           </div>
         </form>
       </div>
@@ -1802,7 +2209,6 @@ onUnmounted(() => {
           </button>
         </div>
 
-        <!-- Step 1: Dropdown for QR Code Option + Proceed Button -->
         <div class="qr-step-block">
           <div class="qr-step-header">
             <span class="step-pill">STEP 1</span>
@@ -1825,7 +2231,6 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- Step 2: Shown After Clicking "Proceed to QR Code" -->
         <div v-if="selectedQrOption && isProceededToQr" class="qr-step-block">
           <div class="qr-step-header">
             <span class="step-pill">STEP 2 · SCAN QR CODE</span>
@@ -1838,10 +2243,17 @@ onUnmounted(() => {
             <input ref="qrScannerInputRef" v-model="qrScanInput" type="text" class="form-input"
               :placeholder="`Scan ${activeOptionMeta?.label} QR (e.g. QR|L04|BUNDLE-210|QTY-15) & press Enter...`"
               @keydown.enter.prevent="confirmQrScan()" />
+            <button type="button" class="btn btn-qr btn-sm"
+              @click="isCameraActive ? stopQrCamera() : startQrCamera()">
+              {{ isCameraActive ? 'Stop Camera' : 'Open Camera' }}
+            </button>
             <button type="button" class="btn btn-primary btn-sm" @click="confirmQrScan()">
               Scan QR Code
             </button>
           </div>
+
+          <div v-if="cameraError" class="qr-feedback-bar">{{ cameraError }}</div>
+          <div v-show="isCameraActive" id="qr-camera-reader" class="qr-camera-box"></div>
 
           <div class="qr-quick-samples">
             <span class="preset-label">Quick Sample Scan:</span>
@@ -1858,7 +2270,6 @@ onUnmounted(() => {
           {{ qrScanFeedback }}
         </div>
 
-        <!-- Step 3: Output Entry Field + Save Button Shown After Scanning QR Code -->
         <form v-if="selectedQrOption && isProceededToQr && isQrScanned" class="qr-step-block qr-entry-out-box"
           @submit.prevent="submitQrEntryOut">
           <div class="qr-step-header">
@@ -2079,6 +2490,7 @@ onUnmounted(() => {
               <th>QC Pass</th>
               <th>Last → QC Var</th>
               <th>1st → Last Gap</th>
+              <th>Target Eff</th>
               <th>Eff. %</th>
               <th>Actions</th>
             </tr>
@@ -2160,6 +2572,7 @@ onUnmounted(() => {
                     {{ item.line.machineGap }} pcs ({{ item.line.gapMinutes.toLocaleString() }}m)
                   </span>
                 </td>
+                <td class="num-col">{{ item.line.targetEfficiency }}%</td>
                 <td>
                   <span class="eff-pill"
                     :class="item.line.efficiency >= item.line.targetEfficiency ? 'eff-ok' : 'eff-warn'">
@@ -2245,6 +2658,7 @@ onUnmounted(() => {
                     }}m)
                   </span>
                 </td>
+                <td class="num-col">Avg {{ item.subtotal.targetEfficiencyStr }}%</td>
                 <td>
                   <span class="eff-pill"
                     :class="item.subtotal.efficiency >= item.subtotal.targetEfficiency ? 'eff-ok' : 'eff-warn'">
@@ -2260,14 +2674,19 @@ onUnmounted(() => {
             </template>
 
             <tr v-if="groupedTableDisplayRows.length === 0">
-              <td colspan="15" class="empty-state">
-                No lines match your current filter.
-                <button type="button" class="act-btn act-inspect" style="margin-left: 8px" @click="
-                  searchQuery = '';
-                onlyGapAlerts = false;
-                onlyActiveLines = false;
-                selectedUnit = 'ALL';
-                ">
+              <td colspan="16" class="empty-state">
+                {{
+                  linesData.length === 0
+                    ? `${UNIT_LINE_SHEET} is blank — no lines on board yet.`
+                    : 'No lines match your current filter.'
+                }}
+                <button v-if="linesData.length > 0" type="button" class="act-btn act-inspect"
+                  style="margin-left: 8px" @click="
+                    searchQuery = '';
+                  onlyGapAlerts = false;
+                  onlyActiveLines = false;
+                  selectedUnit = 'ALL';
+                  ">
                   Clear Filters
                 </button>
               </td>
@@ -2278,7 +2697,7 @@ onUnmounted(() => {
     </section>
 
     <!-- Single Line Hourly Detail View -->
-    <section v-else class="card-table">
+    <section v-else-if="currentLine && currentLineMetrics" class="card-table">
       <div class="single-line-banner">
         <div class="banner-stat">
           <span class="banner-label">Unit:</span>
@@ -2289,6 +2708,10 @@ onUnmounted(() => {
           <strong class="banner-val target-val">
             {{ currentLineMetrics.effectiveDailyTarget.toLocaleString() }} pcs
           </strong>
+        </div>
+        <div class="banner-stat">
+          <span class="banner-label">Target Eff:</span>
+          <strong class="banner-val">{{ currentLineMetrics.targetEfficiency }}%</strong>
         </div>
         <div class="banner-stat npt-hover-wrap">
           <span class="banner-label">Line Wise NPT:</span>
@@ -2339,7 +2762,7 @@ onUnmounted(() => {
         </div>
         <div class="row-actions">
           <button type="button" class="act-btn act-edit" @click="openLinePopup(currentLine.id)">
-            Edit in Popup
+            Edit {{ currentLineMetrics.unit }}
           </button>
           <button type="button" class="act-btn" @click="addFirstMachinePieces(currentLine.id, 10)">
             +10 1st M/C
@@ -2516,7 +2939,6 @@ onUnmounted(() => {
   transform: translateY(-4px);
 }
 
-/* Popup Modal */
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -2541,6 +2963,13 @@ onUnmounted(() => {
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65);
   color: #f8fafc;
   box-sizing: border-box;
+}
+
+.unit-popup-card {
+  max-width: min(1020px, 96vw);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .qr-modal-card {
@@ -2610,10 +3039,176 @@ onUnmounted(() => {
   margin-top: 14px;
 }
 
-.modal-grid-2 {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+.unit-popup-card .modal-form {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.popup-unit-head-bar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
   gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(129, 140, 248, 0.32);
+  flex-shrink: 0;
+}
+
+.popup-unit-select-wrap {
+  display: inline-flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 8px;
+  width: auto;
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.popup-unit-label {
+  white-space: nowrap;
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: #cbd5e1;
+}
+
+.popup-unit-select {
+  width: auto !important;
+  min-width: 110px;
+}
+
+.popup-unit-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.excel-sheet-wrap {
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 170px;
+  max-height: 44dvh;
+  overflow: auto;
+  margin: 0;
+  padding: 0;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #080e1a;
+  scrollbar-gutter: stable;
+}
+
+.excel-sheet-table {
+  width: 100%;
+  min-width: 780px;
+  border-collapse: collapse;
+  margin: 0;
+  padding: 0;
+  table-layout: fixed;
+  font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.excel-sheet-table th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  margin: 0;
+  padding: 6px 6px;
+  background: #1b2842;
+  color: #e2e8f0;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  text-align: left;
+  border-right: 1px solid rgba(148, 163, 184, 0.24);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.38);
+  user-select: none;
+}
+
+.excel-sheet-table th:last-child {
+  border-right: none;
+}
+
+.xl-corner-th {
+  width: 34px;
+  text-align: center !important;
+  background: #131d32 !important;
+  color: #94a3b8 !important;
+  z-index: 4 !important;
+}
+
+.xl-row-num {
+  width: 34px;
+  margin: 0;
+  padding: 0;
+  background: #131d32;
+  color: #94a3b8;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-align: center;
+  border-right: 1px solid rgba(148, 163, 184, 0.24);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  user-select: none;
+}
+
+.xl-cell {
+  margin: 0 !important;
+  padding: 0 !important;
+  border-right: 1px solid rgba(148, 163, 184, 0.18);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  background: #09101d;
+}
+
+.xl-cell:last-child {
+  border-right: none;
+}
+
+.xl-input,
+.xl-select {
+  display: block;
+  width: 100%;
+  height: 27px;
+  margin: 0 !important;
+  padding: 0 6px !important;
+  border: none !important;
+  border-radius: 0 !important;
+  background: transparent;
+  color: #f8fafc;
+  font-size: 0.76rem;
+  font-family: inherit;
+  box-sizing: border-box;
+  outline: none;
+}
+
+.xl-select option {
+  background: #0f172a;
+  color: #f8fafc;
+}
+
+.xl-input:focus,
+.xl-select:focus {
+  background: #0f2447;
+  box-shadow: inset 0 0 0 2px #38bdf8;
+  position: relative;
+  z-index: 2;
+}
+
+.xl-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.xl-w-line {
+  font-weight: 600;
+  color: #93c5fd;
+}
+
+.xl-w-eff {
+  color: #86efac;
+  font-weight: 600;
 }
 
 .modal-grid-3 {
@@ -2629,6 +3224,7 @@ onUnmounted(() => {
   font-size: 0.8rem;
   color: #cbd5e1;
   cursor: pointer;
+  flex-shrink: 0;
 }
 
 .modal-summary-bar {
@@ -2642,6 +3238,7 @@ onUnmounted(() => {
   padding: 9px 12px;
   font-size: 0.78rem;
   color: #cbd5e1;
+  flex-shrink: 0;
 }
 
 .modal-footer {
@@ -2650,9 +3247,9 @@ onUnmounted(() => {
   justify-content: flex-end;
   gap: 10px;
   padding-top: 6px;
+  flex-shrink: 0;
 }
 
-/* Step-by-Step QR Popup Styles */
 .qr-step-block {
   margin-top: 12px;
   padding: 12px 14px;
@@ -2710,6 +3307,16 @@ onUnmounted(() => {
 .qr-option-dropdown,
 .qr-scan-row .form-input {
   flex: 1 1 200px;
+}
+
+.qr-camera-box {
+  width: 100%;
+  max-width: 360px;
+  margin: 4px auto 0;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  background: #09101d;
 }
 
 .qr-quick-samples {
@@ -3201,7 +3808,6 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-/* Hover Popover for NPT Problems & Minutes (Opens Upper) */
 .npt-hover-wrap {
   position: relative;
   cursor: pointer;
@@ -3677,18 +4283,6 @@ onUnmounted(() => {
 
 .act-btn:hover {
   background: #334155;
-}
-
-.act-deactive {
-  background: rgba(248, 113, 113, 0.16);
-  color: #fca5a5;
-  border-color: rgba(248, 113, 113, 0.35);
-}
-
-.act-activate {
-  background: rgba(74, 222, 128, 0.16);
-  color: #86efac;
-  border-color: rgba(74, 222, 128, 0.35);
 }
 
 .act-edit {
