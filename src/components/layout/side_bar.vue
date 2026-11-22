@@ -33,7 +33,7 @@
             Analytics
           </a>
         </li>
-             <li class="nav-item">
+        <li class="nav-item">
           <a href="#order_master" class="nav-link dropdown-toggle collapsed" data-bs-toggle="collapse" role="button"
             aria-expanded="false">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -51,7 +51,7 @@
             </ul>
           </div>
         </li>
-                     <li class="nav-item">
+        <li class="nav-item">
           <a href="#liveboard" class="nav-link dropdown-toggle collapsed" data-bs-toggle="collapse" role="button"
             aria-expanded="false">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -64,7 +64,7 @@
           <div class="collapse ms-3 border-start ps-2 my-1" id="liveboard">
             <ul class="nav nav-pills flex-column gap-1">
               <li>
-                <RouterLink to="/live_board" class="nav-link py-1 fs-7">Add New Order</RouterLink>
+                <RouterLink to="/live_board" class="nav-link py-1 fs-7">Production Board</RouterLink>
               </li>
             </ul>
           </div>
@@ -132,7 +132,7 @@
               <li>
                 <RouterLink to="/machine_list" class="nav-link py-1 fs-7">Machine List</RouterLink>
               </li>
-               <li>
+              <li>
                 <RouterLink to="/add_line" class="nav-link py-1 fs-7">Add Line </RouterLink>
               </li>
             </ul>
@@ -221,7 +221,7 @@
             </ul>
           </div>
         </li>
-               <li class="nav-item">
+        <li class="nav-item">
           <a href="#machineInventory" class="nav-link dropdown-toggle collapsed" data-bs-toggle="collapse" role="button"
             aria-expanded="false">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
