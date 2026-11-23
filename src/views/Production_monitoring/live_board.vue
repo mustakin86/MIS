@@ -197,21 +197,21 @@ function normalizeLineRows(rawRows, lineIndex = 0) {
 
 function aggregateProblemsFromRows(hourlyRows) {
   const map = {}
-  ;(hourlyRows || []).forEach((r, idx) => {
-    const mins = Math.max(0, Number(r.downtimeMin) || 0)
-    if (mins <= 0) return
-    const items = normalizeNptProblems(
-      r.nptProblems,
-      mins,
-      NPT_PROBLEM_TYPES[idx % NPT_PROBLEM_TYPES.length],
-      0,
-      idx
-    )
-    items.forEach((entry) => {
-      const key = entry.problem || 'MACHINE PROBLEM'
-      map[key] = (map[key] || 0) + (Number(entry.minutes) || 0)
+    ; (hourlyRows || []).forEach((r, idx) => {
+      const mins = Math.max(0, Number(r.downtimeMin) || 0)
+      if (mins <= 0) return
+      const items = normalizeNptProblems(
+        r.nptProblems,
+        mins,
+        NPT_PROBLEM_TYPES[idx % NPT_PROBLEM_TYPES.length],
+        0,
+        idx
+      )
+      items.forEach((entry) => {
+        const key = entry.problem || 'MACHINE PROBLEM'
+        map[key] = (map[key] || 0) + (Number(entry.minutes) || 0)
+      })
     })
-  })
   return Object.entries(map)
     .map(([problem, minutes]) => ({ problem, minutes }))
     .sort((a, b) => b.minutes - a.minutes)
@@ -220,7 +220,7 @@ function aggregateProblemsFromRows(hourlyRows) {
 function mergeProblemSummaries(summaries) {
   const map = {}
   summaries.forEach((list) => {
-    ;(list || []).forEach((item) => {
+    ; (list || []).forEach((item) => {
       const key = item.problem || 'MACHINE PROBLEM'
       map[key] = (map[key] || 0) + (Number(item.minutes) || 0)
     })
@@ -230,11 +230,10 @@ function mergeProblemSummaries(summaries) {
     .sort((a, b) => b.minutes - a.minutes)
 }
 
-// Blank by default until a non-empty sheet is fetched or lines are saved via the popup
 const linesData = ref([])
 const itemOptions = ref(Object.values(ITEM_NAMES_BY_TYPE))
 
-function buildDefaultFallbackLines(totalLines = 32) {
+function buildDefaultFallbackLines(totalLines = 33) {
   return Array.from({ length: totalLines }, (_, idx) => {
     const num = idx + 1
     const padded = String(num).padStart(2, '0')
@@ -261,7 +260,6 @@ function buildDefaultFallbackLines(totalLines = 32) {
   })
 }
 
-// Reactive Device Display State
 const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1440)
 const viewportHeight = ref(typeof window !== 'undefined' ? window.innerHeight : 900)
 
@@ -307,16 +305,25 @@ const isPopupOpen = ref(false)
 const excelGridRef = ref(null)
 const popupDraft = ref({
   unit: 'Unit 01',
+  date: new Date().toISOString().slice(0, 10),
   recalcHourlyTargets: false,
   lines: []
 })
 
-// Step-by-Step QR Entry & Camera State
+// Step-by-Step QR Entry & Camera State:
+// 1. Open QR Entry Form -> Select Option
+// 2. Show only 1 Output Entry field
+// 3. Enter Output -> Click Scan QR
+// 4. Scan QR -> Insert data with line & scan time
 const isQrModalOpen = ref(false)
 const selectedQrOption = ref('')
-const isProceededToQr = ref(false)
+const isOutputEntered = ref(false)
+const isScanStepVisible = ref(false)
 const qrScanInput = ref('')
 const scannedQrCode = ref('')
+const scannedLineLabel = ref('')
+const scannedAtTime = ref('')
+const scannedAtIso = ref('')
 const isQrScanned = ref(false)
 const qrScanFeedback = ref('')
 const qrScanHistory = ref([])
@@ -329,10 +336,18 @@ let html5QrScanner = null
 const qrEntryOut = ref({
   lineId: 'line-01',
   hourIndex: 6,
-  qty: 15,
-  qcPass: 15,
+  qty: null,
+  qcPass: null,
   dhu: 1.2,
   station: ''
+})
+
+const hasValidOutputEntry = computed(() => {
+  if (!selectedQrOption.value) return false
+  if (selectedQrOption.value === 'QC_PASS') {
+    return Number(qrEntryOut.value.qcPass) > 0
+  }
+  return Number(qrEntryOut.value.qty) > 0
 })
 
 function notify(msg) {
@@ -354,19 +369,19 @@ function normalizeLineIdFromLabel(label, fallbackIdx = 0) {
 function mapSheetRowToLine(rawRow, fallbackIdx = 0, existingLine = null) {
   const unitName = String(
     rawRow?.Unit ??
-      rawRow?.unit ??
-      rawRow?.unitName ??
-      existingLine?.unit ??
-      getUnitForLineIndex(fallbackIdx)
+    rawRow?.unit ??
+    rawRow?.unitName ??
+    existingLine?.unit ??
+    getUnitForLineIndex(fallbackIdx)
   ).trim()
 
   const lineLabel = String(
     rawRow?.Line_No ??
-      rawRow?.line_no ??
-      rawRow?.lineNo ??
-      rawRow?.lineName ??
-      existingLine?.lineName ??
-      `Line ${String(fallbackIdx + 1).padStart(2, '0')}`
+    rawRow?.line_no ??
+    rawRow?.lineNo ??
+    rawRow?.lineName ??
+    existingLine?.lineName ??
+    `Line ${String(fallbackIdx + 1).padStart(2, '0')}`
   ).trim()
 
   const id = String(
@@ -380,10 +395,10 @@ function mapSheetRowToLine(rawRow, fallbackIdx = 0, existingLine = null) {
   const dailyTarget =
     Number(
       rawRow?.dailyTarget ??
-        rawRow?.Daily_Target ??
-        rawRow?.target ??
-        existingLine?.dailyTarget ??
-        1400
+      rawRow?.Daily_Target ??
+      rawRow?.target ??
+      existingLine?.dailyTarget ??
+      1400
     ) || 1400
 
   const activeHourIndex =
@@ -413,10 +428,10 @@ function mapSheetRowToLine(rawRow, fallbackIdx = 0, existingLine = null) {
     styleNo,
     itemName: String(
       rawRow?.itemName ??
-        rawRow?.Item_name ??
-        rawRow?.Item_Name ??
-        existingLine?.itemName ??
-        inferItemName(styleNo)
+      rawRow?.Item_name ??
+      rawRow?.Item_Name ??
+      existingLine?.itemName ??
+      inferItemName(styleNo)
     ).trim(),
     modelNo: String(
       rawRow?.modelNo ?? rawRow?.Model_No ?? existingLine?.modelNo ?? 'MOD-ALPHA-V2'
@@ -433,10 +448,10 @@ function mapSheetRowToLine(rawRow, fallbackIdx = 0, existingLine = null) {
     targetEfficiency:
       Number(
         rawRow?.targetEfficiency ??
-          rawRow?.Target_Efficiency ??
-          rawRow?.target_efficiency ??
-          existingLine?.targetEfficiency ??
-          75
+        rawRow?.Target_Efficiency ??
+        rawRow?.target_efficiency ??
+        existingLine?.targetEfficiency ??
+        75
       ) || 75,
     maxLineGap: Number(rawRow?.maxLineGap ?? existingLine?.maxLineGap ?? 60) || 60,
     firstMachineTotal:
@@ -462,7 +477,6 @@ async function fetchUnitLinesFromApi({ silent = false } = {}) {
           String(r.Line_No || r.line_no || r.lineName || '').trim())
     )
 
-    // Google Sheet is blank -> keep live board blank
     if (validRows.length === 0) {
       linesData.value = []
       selectedLineId.value = 'ALL'
@@ -504,14 +518,14 @@ function extractItemNameFromRow(row) {
   if (!row || typeof row !== 'object') return ''
   return String(
     row.Item_name ??
-      row.Item_Name ??
-      row.itemName ??
-      row.item_name ??
-      row.Item ??
-      row.item ??
-      row.Name ??
-      row.name ??
-      ''
+    row.Item_Name ??
+    row.itemName ??
+    row.item_name ??
+    row.Item ??
+    row.item ??
+    row.Name ??
+    row.name ??
+    ''
   ).trim()
 }
 
@@ -633,7 +647,7 @@ const unitOptions = computed(() => {
 })
 
 const lineDropdownOptions = computed(() => {
-  const source = linesData.value.length > 0 ? linesData.value : buildDefaultFallbackLines(32)
+  const source = linesData.value.length > 0 ? linesData.value : buildDefaultFallbackLines(33)
   return source.map((line, idx) => ({
     id: line.id,
     lineName: line.lineName || `Line ${String(idx + 1).padStart(2, '0')}`,
@@ -838,6 +852,7 @@ function loadPopupForUnit(unitName) {
   const resolvedUnit = unitName || unitOptions.value[0] || 'Unit 01'
   popupDraft.value = {
     unit: resolvedUnit,
+    date: new Date().toISOString().slice(0, 10),
     recalcHourlyTargets: false,
     lines: buildUnitPopupRows(resolvedUnit)
   }
@@ -880,9 +895,9 @@ function isRowPopulated(row) {
   if (!row) return false
   return Boolean(
     String(row.lineId || '').trim() ||
-      String(row.lineName || '').trim() ||
-      String(row.poNo || '').trim() ||
-      String(row.styleNo || '').trim()
+    String(row.lineName || '').trim() ||
+    String(row.poNo || '').trim() ||
+    String(row.styleNo || '').trim()
   )
 }
 
@@ -893,8 +908,8 @@ const popupTotals = computed(() => {
   const dailyTarget = rows.reduce((s, r) => s + (Number(r.dailyTarget) || 0), 0)
   const avgTargetEff = rows.length
     ? (
-        rows.reduce((s, r) => s + (Number(r.targetEfficiency) || 75), 0) / rows.length
-      ).toFixed(1)
+      rows.reduce((s, r) => s + (Number(r.targetEfficiency) || 75), 0) / rows.length
+    ).toFixed(1)
     : '75.0'
   return {
     totalLines: rows.length,
@@ -1031,7 +1046,7 @@ async function startQrCamera() {
       async (decodedText) => {
         qrScanInput.value = decodedText
         await stopQrCamera()
-        confirmQrScan(decodedText)
+        await confirmQrScan(decodedText)
       },
       () => {
         // Ignore per-frame scan misses while searching
@@ -1046,20 +1061,28 @@ async function startQrCamera() {
 async function resetQrFlowState(keepOption = false) {
   await stopQrCamera()
   cameraError.value = ''
-  if (!keepOption) {
-    selectedQrOption.value = ''
-    isProceededToQr.value = false
-  } else {
-    isProceededToQr.value = Boolean(selectedQrOption.value)
-  }
+  isScanStepVisible.value = false
+  isOutputEntered.value = false
   qrScanInput.value = ''
   scannedQrCode.value = ''
+  scannedLineLabel.value = ''
+  scannedAtTime.value = ''
+  scannedAtIso.value = ''
   isQrScanned.value = false
   qrScanFeedback.value = ''
-  if (keepOption && selectedQrOption.value && isProceededToQr.value) {
-    nextTick(() => {
-      qrScannerInputRef.value?.focus()
-    })
+
+  if (!keepOption) {
+    selectedQrOption.value = ''
+    qrEntryOut.value.qty = null
+    qrEntryOut.value.qcPass = null
+    qrEntryOut.value.station = ''
+  } else if (selectedQrOption.value) {
+    const meta = QR_OPTIONS.find((o) => o.key === selectedQrOption.value)
+    isOutputEntered.value = true
+    qrEntryOut.value.qty = null
+    qrEntryOut.value.qcPass = null
+    qrEntryOut.value.station = meta?.defaultStation || ''
+    qrScanFeedback.value = `Enter ${meta?.label} output quantity, then click "Scan QR".`
   }
 }
 
@@ -1072,8 +1095,8 @@ async function openQrEntryPopup() {
   qrEntryOut.value = {
     lineId: defaultLine?.id || 'line-01',
     hourIndex: Math.min(Math.max(0, defaultLine?.activeHourIndex ?? 6), 8),
-    qty: 15,
-    qcPass: 15,
+    qty: null,
+    qcPass: null,
     dhu: 1.2,
     station: ''
   }
@@ -1089,28 +1112,48 @@ async function onQrOptionDropdownChange(optionKey) {
   await stopQrCamera()
   cameraError.value = ''
   selectedQrOption.value = optionKey
+  isScanStepVisible.value = false
+  isQrScanned.value = false
+  scannedQrCode.value = ''
+  scannedLineLabel.value = ''
+  scannedAtTime.value = ''
+  scannedAtIso.value = ''
+  qrScanInput.value = ''
+  qrEntryOut.value.qty = null
+  qrEntryOut.value.qcPass = null
+
   const meta = QR_OPTIONS.find((o) => o.key === optionKey)
   qrEntryOut.value.station = meta?.defaultStation || ''
-  isProceededToQr.value = false
-  qrScanInput.value = ''
-  scannedQrCode.value = ''
-  isQrScanned.value = false
+  isOutputEntered.value = Boolean(optionKey)
   qrScanFeedback.value = optionKey
-    ? `Selected "${meta?.label}". Click "Proceed to QR Code" to scan.`
+    ? `Option "${meta?.label}" selected. Enter output quantity, then click "Scan QR".`
     : ''
 }
 
-function proceedToQrCode() {
+function handleOutputEntryChange() {
+  if (!selectedQrOption.value) return
+  if (!hasValidOutputEntry.value) {
+    isScanStepVisible.value = false
+    stopQrCamera()
+  }
+}
+
+async function openScanAfterOutput() {
   if (!selectedQrOption.value) {
-    qrScanFeedback.value = 'Please select a QR Code Option first.'
+    qrScanFeedback.value = 'Please select an option first.'
     return
   }
-  isProceededToQr.value = true
+  if (!hasValidOutputEntry.value) {
+    qrScanFeedback.value = 'Please enter a valid output quantity (greater than 0) first.'
+    return
+  }
+
+  isScanStepVisible.value = true
   isQrScanned.value = false
-  qrScanFeedback.value = `Ready to scan QR code for ${activeOptionMeta.value?.label}.`
-  nextTick(() => {
-    qrScannerInputRef.value?.focus()
-  })
+  qrScanFeedback.value = `Output entered. Scan QR code now for ${activeOptionMeta.value?.label}.`
+  await nextTick()
+  qrScannerInputRef.value?.focus()
+  await startQrCamera()
 }
 
 function parseQrPayload(rawText) {
@@ -1119,39 +1162,34 @@ function parseQrPayload(rawText) {
 
   const upper = clean.toUpperCase()
   let lineId = null
-  let qty = null
 
   const lineMatch =
     upper.match(/(?:LINE[\s:_-]*|L)(\d{1,2})\b/) ||
-    upper.match(/\b0?([1-9]|[12]\d|3[0-2])\b/)
+    upper.match(/\b(3[0-3]|[12]\d|0?[1-9])\b/)
+
   if (lineMatch) {
     const num = Number(lineMatch[1])
-    if (num >= 1 && num <= 32) {
+    if (num >= 1 && num <= 33) {
       lineId = `line-${String(num).padStart(2, '0')}`
     }
   }
 
-  const qtyMatch = upper.match(/(?:QTY|PCS|PC|BUNDLE)[\s:_-]*(\d+)/)
-  if (qtyMatch) {
-    qty = Math.max(1, Number(qtyMatch[1]))
-  }
-
-  return { raw: clean, lineId, qty }
+  return { raw: clean, lineId }
 }
 
 async function confirmQrScan(overrideCode = '') {
   if (!selectedQrOption.value) {
-    qrScanFeedback.value = 'Please select a QR Code Option first.'
+    qrScanFeedback.value = 'Please select an option first.'
     return
   }
-  if (!isProceededToQr.value) {
-    qrScanFeedback.value = 'Click "Proceed to QR Code" first.'
+  if (!hasValidOutputEntry.value) {
+    qrScanFeedback.value = 'Enter output quantity before scanning.'
     return
   }
 
   const rawCode = String(overrideCode || qrScanInput.value || '').trim()
   if (!rawCode) {
-    qrScanFeedback.value = 'Scan or enter a QR code first to show Output Entry.'
+    qrScanFeedback.value = 'Scan or enter a QR code first.'
     return
   }
 
@@ -1159,38 +1197,44 @@ async function confirmQrScan(overrideCode = '') {
     await stopQrCamera()
   }
 
+  const now = new Date()
+  const scanTimeStr = now.toLocaleTimeString()
+  const scanIsoStr = now.toISOString()
+
   const parsed = parseQrPayload(rawCode)
   scannedQrCode.value = parsed?.raw || rawCode
+  scannedAtTime.value = scanTimeStr
+  scannedAtIso.value = scanIsoStr
+  isQrScanned.value = true
 
   if (parsed?.lineId) {
     qrEntryOut.value.lineId = parsed.lineId
   }
-  if (parsed?.qty) {
-    qrEntryOut.value.qty = parsed.qty
-    if (selectedQrOption.value === 'QC_PASS') {
-      qrEntryOut.value.qcPass = parsed.qty
-    } else {
-      qrEntryOut.value.qcPass = calcHourQcPass(parsed.qty, qrEntryOut.value.dhu)
-    }
-  }
 
-  isQrScanned.value = true
-  qrScanFeedback.value = `QR scanned: ${scannedQrCode.value}. Enter output and click Save.`
+  const targetLineObj =
+    linesData.value.find((l) => l.id === qrEntryOut.value.lineId) || linesData.value[0]
+  scannedLineLabel.value = targetLineObj?.lineName || qrEntryOut.value.lineId
+
+  insertScannedQrRecord(scanTimeStr, scanIsoStr)
 }
 
-function submitQrEntryOut() {
-  if (!selectedQrOption.value || !isProceededToQr.value || !isQrScanned.value) return
+function insertScannedQrRecord(scanTimeStr, scanIsoStr) {
+  const line = linesData.value.find((l) => l.id === qrEntryOut.value.lineId) || linesData.value[0]
+  if (!line) {
+    qrScanFeedback.value = `Scanned ${scannedQrCode.value} at ${scanTimeStr}, but no line was found.`
+    return
+  }
 
-  const line = linesData.value.find((l) => l.id === qrEntryOut.value.lineId)
-  if (!line) return
+  const resolvedLineName = line.lineName || scannedLineLabel.value || qrEntryOut.value.lineId
+  scannedLineLabel.value = resolvedLineName
 
   const idx = Math.min(
-    Math.max(0, Number(qrEntryOut.value.hourIndex) || 0),
+    Math.max(0, Number(qrEntryOut.value.hourIndex) ?? line.activeHourIndex ?? 0),
     line.hourlyRows.length - 1
   )
   const row = line.hourlyRows[idx]
   const qty = Math.max(1, Math.round(Number(qrEntryOut.value.qty) || 1))
-  const nowTime = new Date().toLocaleTimeString()
+  const dhuVal = Math.max(0, Number(qrEntryOut.value.dhu) || 0)
 
   let logSummary = ''
   let historyBadge = ''
@@ -1198,23 +1242,21 @@ function submitQrEntryOut() {
   if (selectedQrOption.value === 'FIRST_MC') {
     const lineActual = line.hourlyRows.reduce((s, r) => s + r.actual, 0)
     line.firstMachineTotal = Math.max(lineActual, line.firstMachineTotal + qty)
-    logSummary = `1st M/C Output Saved: +${qty} pcs on ${line.lineName} (${line.unit})`
+    logSummary = `1st M/C +${qty} pcs on ${resolvedLineName} (${line.unit}) · Scanned at ${scanTimeStr}`
     historyBadge = `+${qty} 1st M/C`
   } else if (selectedQrOption.value === 'LAST_MC') {
     row.actual += qty
-    const dhuVal = Math.max(0, Number(qrEntryOut.value.dhu) || 0)
     row.dhu = dhuVal
-    const qcAdd = Math.min(qty, Math.max(0, Math.round(Number(qrEntryOut.value.qcPass) || 0)))
+    const qcAdd = calcHourQcPass(qty, dhuVal)
     row.qcPass = Math.min(row.actual, (Number(row.qcPass) || 0) + qcAdd)
     line.firstMachineTotal = Math.max(
       line.firstMachineTotal,
       line.hourlyRows.reduce((s, r) => s + r.actual, 0)
     )
-    logSummary = `Last M/C Output Saved: +${qty} pcs (+${qcAdd} QC Pass) on ${line.lineName} (${row.hour})`
+    logSummary = `Last M/C +${qty} pcs (+${qcAdd} QC) on ${resolvedLineName} (${row.hour}) · Scanned at ${scanTimeStr}`
     historyBadge = `+${qty} Out / +${qcAdd} QC`
   } else if (selectedQrOption.value === 'QC_PASS') {
     const qcAdd = Math.max(1, Math.round(Number(qrEntryOut.value.qcPass) || qty))
-    const dhuVal = Math.max(0, Number(qrEntryOut.value.dhu) || 0)
     row.dhu = dhuVal
     if (row.actual < (Number(row.qcPass) || 0) + qcAdd) {
       row.actual = (Number(row.qcPass) || 0) + qcAdd
@@ -1224,28 +1266,34 @@ function submitQrEntryOut() {
       line.firstMachineTotal,
       line.hourlyRows.reduce((s, r) => s + r.actual, 0)
     )
-    logSummary = `QC Pass Output Saved: +${qcAdd} pcs on ${line.lineName} (${row.hour})`
+    logSummary = `QC Pass +${qcAdd} pcs on ${resolvedLineName} (${row.hour}) · Scanned at ${scanTimeStr}`
     historyBadge = `+${qcAdd} QC Pass`
   }
 
-  lastUpdated.value = nowTime
+  lastUpdated.value = scanTimeStr
+  qrScanFeedback.value = `Inserted "${scannedQrCode.value}" · Line: ${resolvedLineName} · Scan Time: ${scanTimeStr} (${historyBadge}).`
+
   qrScanHistory.value.unshift({
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    time: nowTime,
+    time: scanTimeStr,
+    scannedAt: scanIsoStr,
     optionLabel: activeOptionMeta.value?.label || selectedQrOption.value,
-    lineName: line.lineName,
+    lineName: resolvedLineName,
     qrCode: scannedQrCode.value,
     summary: historyBadge
   })
   if (qrScanHistory.value.length > 6) qrScanHistory.value.pop()
 
   notify(logSummary)
+
   sendToGasBackend('saveQrEntry', {
     optionKey: selectedQrOption.value,
     optionLabel: activeOptionMeta.value?.label || selectedQrOption.value,
     qrCode: scannedQrCode.value,
+    scannedAt: scanIsoStr,
+    scanTime: scanTimeStr,
     lineId: line.id,
-    lineName: line.lineName,
+    lineName: resolvedLineName,
     unit: line.unit,
     hourIndex: idx,
     hour: row.hour,
@@ -1255,7 +1303,6 @@ function submitQrEntryOut() {
     station: qrEntryOut.value.station,
     updatedLine: JSON.parse(JSON.stringify(line))
   })
-  closeQrEntryPopup()
 }
 
 function syncHourlyRowToGas(line, rowIndex) {
@@ -1480,11 +1527,11 @@ function buildUnitSubtotalRow(unitName, unitLines) {
     : 0
   const targetEffAvg = lineCount
     ? Number(
-        (
-          activeUnitLines.reduce((s, l) => s + (Number(l.targetEfficiency) || 75), 0) /
-          lineCount
-        ).toFixed(1)
-      )
+      (
+        activeUnitLines.reduce((s, l) => s + (Number(l.targetEfficiency) || 75), 0) /
+        lineCount
+      ).toFixed(1)
+    )
     : 75
 
   return {
@@ -1960,8 +2007,7 @@ onUnmounted(() => {
         <input v-if="isAllLines" v-model="searchQuery" type="search" aria-label="Search PO, Style, Item, Line or Buyer"
           placeholder="Search PO, Style, Item, Line..." class="search-input" />
 
-        <button v-if="!isAllLines && currentLine" type="button" class="pill-btn"
-          @click="openLinePopup(currentLine.id)">
+        <button v-if="!isAllLines && currentLine" type="button" class="pill-btn" @click="openLinePopup(currentLine.id)">
           Edit {{ currentLine.unit }} Lines
         </button>
       </div>
@@ -2040,7 +2086,8 @@ onUnmounted(() => {
           <template v-else-if="currentLine && currentLineMetrics">
             <strong>{{ currentLine.unit }}</strong> · Item <strong>{{ currentLine.itemName }}</strong> · PO
             <strong>{{ currentLine.poNo }}</strong> · Style <strong>{{ currentLine.styleNo }}</strong> · SMV
-            <strong>{{ currentLine.smv }}m</strong> · Target Eff <strong>{{ currentLineMetrics.targetEfficiency }}%</strong> · Updated {{ lastUpdated }}
+            <strong>{{ currentLine.smv }}m</strong> · Target Eff <strong>{{ currentLineMetrics.targetEfficiency
+            }}%</strong> · Updated {{ lastUpdated }}
           </template>
         </p>
       </div>
@@ -2057,10 +2104,10 @@ onUnmounted(() => {
       <div class="modal-card unit-popup-card">
         <div class="modal-head">
           <div>
-            <span class="modal-badge">UNIT → LINE ENTRY · AUTO +1 ROW</span>
-            <h2 id="line-setup-popup-title" class="modal-title">
-              Select Unit → Select Line Under Unit → Auto Add Next Row
-            </h2>
+            <span class="modal-badge">UNIT → LINE ENTRY</span>
+            <span id="line-setup-popup-title" class="xl-sheet-tab">
+              {{ popupDraft.unit }} · Line Setup Sheet
+            </span>
           </div>
           <button type="button" class="modal-close-btn" aria-label="Close popup" @click="closeLinePopup">
             ✕
@@ -2068,7 +2115,6 @@ onUnmounted(() => {
         </div>
 
         <form class="modal-form" @submit.prevent="saveLinePopup">
-          <!-- Step 1: Unit Header -->
           <div class="popup-unit-head-bar">
             <label class="field-group popup-unit-select-wrap">
               <span class="popup-unit-label">Unit:-</span>
@@ -2078,6 +2124,10 @@ onUnmounted(() => {
                   {{ u }}
                 </option>
               </select>
+            </label>
+            <label class="field-group popup-unit-select-wrap">
+              <span class="popup-unit-label">Date:-</span>
+              <input v-model="popupDraft.date" type="date" class="form-input popup-unit-date" />
             </label>
 
             <div class="popup-unit-meta">
@@ -2092,7 +2142,18 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <!-- Scrollable Excel-Style Grid Table Inside Popup -->
+          <!-- Excel-style Name Box + Formula / Summary Strip -->
+          <div class="xl-formula-bar">
+            <span class="xl-name-box">fx</span>
+            <span class="xl-formula-text">
+              =SUM({{ popupDraft.unit }}) · Rows: <strong>{{ popupTotals.totalLines }}</strong> ·
+              Avg Eff: <strong>{{ popupTotals.avgTargetEff }}%</strong> ·
+              Manpower: <strong>{{ popupTotals.operators }} Op + {{ popupTotals.helpers }} Hlp = {{ popupTotals.manpower
+              }}</strong> ·
+              Target: <strong>{{ popupTotals.dailyTarget.toLocaleString() }} pcs</strong>
+            </span>
+          </div>
+
           <div class="excel-sheet-wrap">
             <table ref="excelGridRef" class="excel-sheet-table" role="grid">
               <thead>
@@ -2101,7 +2162,7 @@ onUnmounted(() => {
                   <th>Line ({{ popupDraft.unit }})</th>
                   <th>PO No</th>
                   <th>Style</th>
-                  <th>Item Name</th>
+                  <th>Item</th>
                   <th>SMV</th>
                   <th>Op</th>
                   <th>Hlp</th>
@@ -2110,7 +2171,7 @@ onUnmounted(() => {
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="(row, rIdx) in popupDraft.lines" :key="row.rowUid">
+                <tr v-for="(row, rIdx) in popupDraft.lines" :key="row.rowUid" class="xl-data-row">
                   <td class="xl-row-num">{{ rIdx + 1 }}</td>
                   <td class="xl-cell">
                     <select :value="row.lineId" aria-label="Select Line under Unit" class="xl-select xl-w-line"
@@ -2139,29 +2200,24 @@ onUnmounted(() => {
                     </select>
                   </td>
                   <td class="xl-cell">
-                    <input v-model.number="row.smv" type="number" min="0.1" step="0.1"
-                      class="xl-input xl-num xl-w-smv"
+                    <input v-model.number="row.smv" type="number" min="0.1" step="0.1" class="xl-input xl-num xl-w-smv"
                       @keydown="handleExcelGridKeydown($event, rIdx, 4)" />
                   </td>
                   <td class="xl-cell">
-                    <input v-model.number="row.operators" type="number" min="0"
-                      class="xl-input xl-num xl-w-op"
+                    <input v-model.number="row.operators" type="number" min="0" class="xl-input xl-num xl-w-op"
                       @keydown="handleExcelGridKeydown($event, rIdx, 5)" />
                   </td>
                   <td class="xl-cell">
-                    <input v-model.number="row.helpers" type="number" min="0"
-                      class="xl-input xl-num xl-w-hlp"
+                    <input v-model.number="row.helpers" type="number" min="0" class="xl-input xl-num xl-w-hlp"
                       @keydown="handleExcelGridKeydown($event, rIdx, 6)" />
                   </td>
                   <td class="xl-cell">
                     <input v-model.number="row.targetEfficiency" type="number" min="1" max="100" step="0.5"
-                      class="xl-input xl-num xl-w-eff"
-                      @keydown="handleExcelGridKeydown($event, rIdx, 7)" />
+                      class="xl-input xl-num xl-w-eff" @keydown="handleExcelGridKeydown($event, rIdx, 7)" />
                   </td>
                   <td class="xl-cell">
                     <input v-model.number="row.dailyTarget" type="number" min="0" step="50"
-                      class="xl-input xl-num xl-w-target"
-                      @keydown="handleExcelGridKeydown($event, rIdx, 8)" />
+                      class="xl-input xl-num xl-w-target" @keydown="handleExcelGridKeydown($event, rIdx, 8)" />
                   </td>
                 </tr>
               </tbody>
@@ -2178,7 +2234,8 @@ onUnmounted(() => {
               Unit: <strong>{{ popupDraft.unit }}</strong> · Rows Entered:
               <strong>{{ popupTotals.totalLines }}</strong> · Avg Target Eff:
               <strong>{{ popupTotals.avgTargetEff }}%</strong> · Manpower:
-              <strong>{{ popupTotals.operators }} Op / {{ popupTotals.helpers }} Hlp ({{ popupTotals.manpower }})</strong>
+              <strong>{{ popupTotals.operators }} Op / {{ popupTotals.helpers }} Hlp ({{ popupTotals.manpower
+              }})</strong>
             </span>
             <span>
               Total Target: <strong>{{ popupTotals.dailyTarget.toLocaleString() }} pcs</strong>
@@ -2201,7 +2258,7 @@ onUnmounted(() => {
           <div>
             <span class="modal-badge qr-modal-badge">QR ENTRY POPUP FORM</span>
             <h2 id="qr-entry-popup-title" class="modal-title">
-              Option Dropdown → Proceed to QR Code → Scan QR → Output Entry &amp; Save
+              Select Option → Enter Output → Scan QR → Insert with Line &amp; Scan Time
             </h2>
           </div>
           <button type="button" class="modal-close-btn" aria-label="Close QR popup" @click="closeQrEntryPopup">
@@ -2209,6 +2266,7 @@ onUnmounted(() => {
           </button>
         </div>
 
+        <!-- STEP 1: SELECT OPTION -->
         <div class="qr-step-block">
           <div class="qr-step-header">
             <span class="step-pill">STEP 1</span>
@@ -2223,17 +2281,52 @@ onUnmounted(() => {
                 {{ opt.label }} ({{ opt.badge }})
               </option>
             </select>
+          </div>
+        </div>
 
-            <button v-if="selectedQrOption && !isProceededToQr" type="button" class="btn btn-primary btn-sm"
-              @click="proceedToQrCode">
-              Proceed to QR Code →
+        <!-- STEP 2: ONLY ONE OUTPUT ENTRY FIELD -->
+        <div v-if="selectedQrOption && isOutputEntered" class="qr-step-block qr-entry-out-box">
+          <div class="qr-step-header">
+            <span class="step-pill step-pill-out">STEP 2 · OUTPUT ENTRY</span>
+            <span class="qr-step-title">
+              Enter Output for <strong>{{ activeOptionMeta?.label }}</strong> · Line:
+              <strong>{{ scannedLineLabel || qrTargetLine.lineName }}</strong>
+              <template v-if="scannedAtTime">
+                · Scan Time: <strong>{{ scannedAtTime }}</strong>
+              </template>
+            </span>
+          </div>
+
+          <div class="qr-single-field-row">
+            <label v-if="selectedQrOption === 'FIRST_MC'" class="field-group qr-single-field">
+              <span>Output Entry (1st M/C pcs)</span>
+              <input v-model.number="qrEntryOut.qty" type="number" min="1" placeholder="Enter 1st M/C pcs"
+                class="form-input" required @input="handleOutputEntryChange" />
+            </label>
+
+            <label v-else-if="selectedQrOption === 'LAST_MC'" class="field-group qr-single-field">
+              <span>Output Entry (Last M/C pcs)</span>
+              <input v-model.number="qrEntryOut.qty" type="number" min="1" placeholder="Enter Last M/C pcs"
+                class="form-input" required @input="handleOutputEntryChange" />
+            </label>
+
+            <label v-else-if="selectedQrOption === 'QC_PASS'" class="field-group qr-single-field">
+              <span>Output Entry (QC Pass pcs)</span>
+              <input v-model.number="qrEntryOut.qcPass" type="number" min="1" placeholder="Enter QC Pass pcs"
+                class="form-input" required @input="handleOutputEntryChange" />
+            </label>
+
+            <button type="button" class="btn btn-primary btn-sm" :disabled="!hasValidOutputEntry"
+              @click="openScanAfterOutput">
+              Scan QR →
             </button>
           </div>
         </div>
 
-        <div v-if="selectedQrOption && isProceededToQr" class="qr-step-block">
+        <!-- STEP 3: SCAN QR & INSERT DATA WITH LINE & SCAN TIME -->
+        <div v-if="selectedQrOption && isScanStepVisible" class="qr-step-block">
           <div class="qr-step-header">
-            <span class="step-pill">STEP 2 · SCAN QR CODE</span>
+            <span class="step-pill">STEP 3 · SCAN QR</span>
             <span class="qr-step-title">
               Scan QR for <strong>{{ activeOptionMeta?.label }}</strong>
             </span>
@@ -2241,14 +2334,13 @@ onUnmounted(() => {
 
           <div class="qr-scan-row">
             <input ref="qrScannerInputRef" v-model="qrScanInput" type="text" class="form-input"
-              :placeholder="`Scan ${activeOptionMeta?.label} QR (e.g. QR|L04|BUNDLE-210|QTY-15) & press Enter...`"
+              :placeholder="`Scan ${activeOptionMeta?.label} QR (e.g. QR|L04|BUNDLE-210) & press Enter...`"
               @keydown.enter.prevent="confirmQrScan()" />
-            <button type="button" class="btn btn-qr btn-sm"
-              @click="isCameraActive ? stopQrCamera() : startQrCamera()">
+            <button type="button" class="btn btn-qr btn-sm" @click="isCameraActive ? stopQrCamera() : startQrCamera()">
               {{ isCameraActive ? 'Stop Camera' : 'Open Camera' }}
             </button>
             <button type="button" class="btn btn-primary btn-sm" @click="confirmQrScan()">
-              Scan QR Code
+              Insert Scan
             </button>
           </div>
 
@@ -2257,12 +2349,22 @@ onUnmounted(() => {
 
           <div class="qr-quick-samples">
             <span class="preset-label">Quick Sample Scan:</span>
-            <button type="button" class="preset-chip" @click="confirmQrScan('QR|L04|BUNDLE-210|QTY-15')">
-              Scan L04 (15 pcs)
+            <button type="button" class="preset-chip" @click="confirmQrScan('QR|L04|BUNDLE-210')">
+              Scan L04
             </button>
-            <button type="button" class="preset-chip" @click="confirmQrScan('QR|L02|BUNDLE-118|QTY-20')">
-              Scan L02 (20 pcs)
+            <button type="button" class="preset-chip" @click="confirmQrScan('QR|L02|BUNDLE-118')">
+              Scan L02
             </button>
+          </div>
+
+          <div v-if="isQrScanned && scannedAtTime" class="modal-summary-bar">
+            <span>
+              QR: <strong>{{ scannedQrCode }}</strong> · Line:
+              <strong>{{ scannedLineLabel || qrTargetLine.lineName }}</strong>
+            </span>
+            <span>
+              Scan Time: <strong>{{ scannedAtTime }}</strong>
+            </span>
           </div>
         </div>
 
@@ -2270,104 +2372,11 @@ onUnmounted(() => {
           {{ qrScanFeedback }}
         </div>
 
-        <form v-if="selectedQrOption && isProceededToQr && isQrScanned" class="qr-step-block qr-entry-out-box"
-          @submit.prevent="submitQrEntryOut">
-          <div class="qr-step-header">
-            <span class="step-pill step-pill-out">STEP 3 · OUTPUT ENTRY</span>
-            <span class="qr-step-title">
-              Scanned QR: <code>{{ scannedQrCode }}</code>
-            </span>
-          </div>
-
-          <div class="modal-grid-3">
-            <label class="field-group">
-              <span>Target Line</span>
-              <select v-model="qrEntryOut.lineId" class="form-select">
-                <option v-for="l in allLineMetrics" :key="l.id" :value="l.id">
-                  {{ l.lineName }} ({{ l.unit }})
-                </option>
-              </select>
-            </label>
-
-            <label v-if="selectedQrOption !== 'FIRST_MC'" class="field-group">
-              <span>Hour Slot</span>
-              <select v-model.number="qrEntryOut.hourIndex" class="form-select">
-                <option v-for="(h, idx) in qrTargetLine.hourlyRows" :key="h.hour" :value="idx">
-                  {{ h.hour }}
-                </option>
-              </select>
-            </label>
-
-            <label v-if="selectedQrOption === 'FIRST_MC'" class="field-group">
-              <span>Output Entry (1st M/C pcs)</span>
-              <input v-model.number="qrEntryOut.qty" type="number" min="1" class="form-input" required />
-            </label>
-
-            <label v-if="selectedQrOption === 'LAST_MC'" class="field-group">
-              <span>Output Entry (Last M/C pcs)</span>
-              <input v-model.number="qrEntryOut.qty" type="number" min="1" class="form-input" required @input="
-                qrEntryOut.qcPass = Math.min(
-                  Number(qrEntryOut.qty) || 0,
-                  Number(qrEntryOut.qcPass) || 0
-                )
-                " />
-            </label>
-
-            <label v-if="selectedQrOption === 'QC_PASS'" class="field-group">
-              <span>Output Entry (QC Pass pcs)</span>
-              <input v-model.number="qrEntryOut.qcPass" type="number" min="1" class="form-input" required />
-            </label>
-
-            <label v-if="selectedQrOption === 'LAST_MC'" class="field-group">
-              <span>QC Pass (pcs)</span>
-              <input v-model.number="qrEntryOut.qcPass" type="number" min="0"
-                :max="Math.max(0, Number(qrEntryOut.qty) || 0)" class="form-input" required />
-            </label>
-
-            <label v-if="selectedQrOption !== 'FIRST_MC'" class="field-group">
-              <span>DHU %</span>
-              <input v-model.number="qrEntryOut.dhu" type="number" min="0" max="100" step="0.1" class="form-input" />
-            </label>
-
-            <label v-if="selectedQrOption === 'FIRST_MC'" class="field-group">
-              <span>Station / Feed Note</span>
-              <input v-model="qrEntryOut.station" type="text" class="form-input" />
-            </label>
-          </div>
-
-          <div class="modal-summary-bar">
-            <span>
-              Option: <strong>{{ activeOptionMeta?.label }}</strong> · Line:
-              <strong>{{ qrTargetLine.lineName }}</strong>
-            </span>
-            <span v-if="selectedQrOption === 'FIRST_MC'">
-              1st M/C After Output:
-              <strong>
-                {{ (qrTargetLine.firstMachineTotal + (Number(qrEntryOut.qty) || 0)).toLocaleString() }} pcs
-              </strong>
-            </span>
-            <span v-else-if="selectedQrOption === 'LAST_MC'">
-              Output: <strong>+{{ Number(qrEntryOut.qty) || 0 }} pcs</strong> · QC Pass:
-              <strong>+{{ Number(qrEntryOut.qcPass) || 0 }} pcs</strong>
-            </span>
-            <span v-else>
-              QC Pass Output: <strong>+{{ Number(qrEntryOut.qcPass) || 0 }} pcs</strong>
-            </span>
-          </div>
-
-          <div class="modal-footer">
-            <button type="button" class="btn btn-outline" @click="resetQrFlowState(true)">
-              Re-Scan QR
-            </button>
-            <button type="submit" class="btn btn-primary">Save</button>
-          </div>
-        </form>
-
         <div v-if="qrScanHistory.length" class="qr-modal-history">
           <span class="preset-label">Recent Logs:</span>
           <div class="qr-history-pills">
             <span v-for="item in qrScanHistory.slice(0, 3)" :key="item.id" class="history-pill">
-              {{ item.optionLabel }} · {{ item.lineName }} {{ item.summary }} ({{ item.time }})
+              {{ item.optionLabel }} · {{ item.lineName }} {{ item.summary }} (Scan: {{ item.time }})
             </span>
           </div>
         </div>
@@ -2680,8 +2689,8 @@ onUnmounted(() => {
                     ? `${UNIT_LINE_SHEET} is blank — no lines on board yet.`
                     : 'No lines match your current filter.'
                 }}
-                <button v-if="linesData.length > 0" type="button" class="act-btn act-inspect"
-                  style="margin-left: 8px" @click="
+                <button v-if="linesData.length > 0" type="button" class="act-btn act-inspect" style="margin-left: 8px"
+                  @click="
                     searchQuery = '';
                   onlyGapAlerts = false;
                   onlyActiveLines = false;
@@ -3086,137 +3095,6 @@ onUnmounted(() => {
   gap: 8px;
 }
 
-.excel-sheet-wrap {
-  width: 100%;
-  flex: 1 1 auto;
-  min-height: 170px;
-  max-height: 44dvh;
-  overflow: auto;
-  margin: 0;
-  padding: 0;
-  border: 1px solid rgba(148, 163, 184, 0.35);
-  background: #080e1a;
-  scrollbar-gutter: stable;
-}
-
-.excel-sheet-table {
-  width: 100%;
-  min-width: 780px;
-  border-collapse: collapse;
-  margin: 0;
-  padding: 0;
-  table-layout: fixed;
-  font-size: 0.76rem;
-  font-variant-numeric: tabular-nums;
-}
-
-.excel-sheet-table th {
-  position: sticky;
-  top: 0;
-  z-index: 3;
-  margin: 0;
-  padding: 6px 6px;
-  background: #1b2842;
-  color: #e2e8f0;
-  font-size: 0.65rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  text-align: left;
-  border-right: 1px solid rgba(148, 163, 184, 0.24);
-  border-bottom: 1px solid rgba(148, 163, 184, 0.38);
-  user-select: none;
-}
-
-.excel-sheet-table th:last-child {
-  border-right: none;
-}
-
-.xl-corner-th {
-  width: 34px;
-  text-align: center !important;
-  background: #131d32 !important;
-  color: #94a3b8 !important;
-  z-index: 4 !important;
-}
-
-.xl-row-num {
-  width: 34px;
-  margin: 0;
-  padding: 0;
-  background: #131d32;
-  color: #94a3b8;
-  font-size: 0.7rem;
-  font-weight: 700;
-  text-align: center;
-  border-right: 1px solid rgba(148, 163, 184, 0.24);
-  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
-  user-select: none;
-}
-
-.xl-cell {
-  margin: 0 !important;
-  padding: 0 !important;
-  border-right: 1px solid rgba(148, 163, 184, 0.18);
-  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
-  background: #09101d;
-}
-
-.xl-cell:last-child {
-  border-right: none;
-}
-
-.xl-input,
-.xl-select {
-  display: block;
-  width: 100%;
-  height: 27px;
-  margin: 0 !important;
-  padding: 0 6px !important;
-  border: none !important;
-  border-radius: 0 !important;
-  background: transparent;
-  color: #f8fafc;
-  font-size: 0.76rem;
-  font-family: inherit;
-  box-sizing: border-box;
-  outline: none;
-}
-
-.xl-select option {
-  background: #0f172a;
-  color: #f8fafc;
-}
-
-.xl-input:focus,
-.xl-select:focus {
-  background: #0f2447;
-  box-shadow: inset 0 0 0 2px #38bdf8;
-  position: relative;
-  z-index: 2;
-}
-
-.xl-num {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
-.xl-w-line {
-  font-weight: 600;
-  color: #93c5fd;
-}
-
-.xl-w-eff {
-  color: #86efac;
-  font-weight: 600;
-}
-
-.modal-grid-3 {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 10px;
-}
-
 .modal-checkbox {
   display: flex;
   align-items: center;
@@ -3264,6 +3142,17 @@ onUnmounted(() => {
 .qr-entry-out-box {
   border-color: rgba(74, 222, 128, 0.36);
   background: rgba(16, 36, 34, 0.65);
+}
+
+.qr-single-field-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.qr-single-field {
+  flex: 1 1 auto;
+  max-width: 320px;
 }
 
 .qr-step-header {
@@ -4308,5 +4197,198 @@ onUnmounted(() => {
   padding: 28px 16px !important;
   color: #94a3b8;
   font-size: 0.88rem;
+}
+
+.xl-sheet-tab {
+  margin-left: 8px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #86efac;
+  background: rgba(22, 101, 52, 0.25);
+  border: 1px solid rgba(74, 222, 128, 0.35);
+  padding: 2px 9px;
+  border-radius: 6px;
+}
+
+.xl-formula-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #0a1220;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 0.75rem;
+  color: #cbd5e1;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.xl-name-box {
+  font-family: Georgia, 'Times New Roman', serif;
+  font-style: italic;
+  font-weight: 700;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.14);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  border-radius: 4px;
+  padding: 1px 7px;
+  font-size: 0.76rem;
+}
+
+.xl-formula-text {
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.excel-sheet-wrap {
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 190px;
+  max-height: 46dvh;
+  overflow: auto;
+  margin: 0;
+  padding: 0;
+  border: 1px solid rgba(148, 163, 184, 0.42);
+  border-radius: 4px;
+  background: #070d18;
+  scrollbar-gutter: stable;
+}
+
+.excel-sheet-table {
+  width: 100%;
+  min-width: 820px;
+  border-collapse: collapse;
+  margin: 0;
+  padding: 0;
+  table-layout: fixed;
+  font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.excel-sheet-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  margin: 0;
+  padding: 6px 6px;
+  background: #1b2842;
+  color: #e2e8f0;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  text-align: left;
+  border-right: 1px solid rgba(148, 163, 184, 0.26);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.4);
+  user-select: none;
+}
+
+.excel-sheet-table th:last-child {
+  border-right: none;
+}
+
+.xl-corner-th {
+  width: 36px;
+  text-align: center !important;
+  background: #111b2e !important;
+  color: #64748b !important;
+  z-index: 4 !important;
+}
+
+.xl-row-num {
+  width: 36px;
+  margin: 0;
+  padding: 0;
+  background: #111b2e;
+  color: #94a3b8;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-align: center;
+  border-right: 1px solid rgba(148, 163, 184, 0.28);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  user-select: none;
+}
+
+.xl-data-row:nth-child(even) .xl-cell {
+  background: #0c1526;
+}
+
+.xl-data-row:focus-within .xl-row-num {
+  background: #1d4ed8;
+  color: #ffffff;
+}
+
+.xl-cell {
+  margin: 0 !important;
+  padding: 0 !important;
+  border-right: 1px solid rgba(148, 163, 184, 0.2);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  background: #080f1c;
+}
+
+.xl-cell:last-child {
+  border-right: none;
+}
+
+.xl-input,
+.xl-select {
+  display: block;
+  width: 100%;
+  height: 28px;
+  margin: 0 !important;
+  padding: 0 6px !important;
+  border: none !important;
+  border-radius: 0 !important;
+  background: transparent;
+  color: #f8fafc;
+  font-size: 0.76rem;
+  font-family: inherit;
+  box-sizing: border-box;
+  outline: none;
+}
+
+.xl-select option {
+  background: #0f172a;
+  color: #f8fafc;
+}
+
+.xl-input:focus,
+.xl-select:focus {
+  background: #0f2447;
+  box-shadow: inset 0 0 0 2px #38bdf8;
+  position: relative;
+  z-index: 2;
+}
+
+.xl-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.xl-w-line {
+  font-weight: 600;
+  color: #93c5fd;
+}
+
+.xl-w-eff {
+  color: #86efac;
+  font-weight: 600;
+}
+
+/* Chrome, Edge, Safari, Opera */
+.xl-input[type='number']::-webkit-outer-spin-button,
+.xl-input[type='number']::-webkit-inner-spin-button,
+.counter-input[type='number']::-webkit-outer-spin-button,
+.counter-input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* Firefox */
+.xl-input[type='number'],
+.counter-input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
 }
 </style>
