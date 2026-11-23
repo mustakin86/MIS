@@ -8,9 +8,13 @@ const BACKEND_URL =
   'https://script.google.com/macros/s/AKfycbz9QfOx3G6ghMSuA9rtjEZLUPL7qJhn8laR2e2hFIzPgFnE7ch4Jb3K9tevP6wiWmcT/exec'
 
 const UNIT_LINE_SHEET = 'Unit_line_No'
+const SHIFT_STORAGE_KEY = 'mis_live_board_shift_config_v1'
 const LINES_PER_UNIT = 8
 const NPT_ALERT_THRESHOLD_MIN = 30
 const DEFAULT_FALLBACK_UNITS = ['Unit 01', 'Unit 02', 'Unit 03', 'Unit 04']
+
+const SHIFT_DURATION_HOURS = 1.15
+const SHIFT_DURATION_MINS = Math.round(SHIFT_DURATION_HOURS * 60) // 69 mins (1h 9m)
 
 const NPT_PROBLEM_TYPES = [
   'MACHINE PROBLEM',
@@ -21,17 +25,401 @@ const NPT_PROBLEM_TYPES = [
   'POWER / GAS'
 ]
 
-const BASE_HOURS = [
-  { hour: '08:00 - 09:00', ratio: 0.1125, dhu: 1.6, downtimeMin: 2, problem: 'MACHINE PROBLEM' },
-  { hour: '09:00 - 10:00', ratio: 0.125, dhu: 1.4, downtimeMin: 0, problem: null },
-  { hour: '10:00 - 11:00', ratio: 0.125, dhu: 1.9, downtimeMin: 3, problem: 'INPUT DELAY' },
-  { hour: '11:00 - 12:00', ratio: 0.125, dhu: 1.3, downtimeMin: 0, problem: null },
-  { hour: '12:00 - 01:00', ratio: 0.1, dhu: 1.5, downtimeMin: 2, problem: 'RIB SHADE' },
-  { hour: '01:00 - 02:00', ratio: 0.125, dhu: 1.4, downtimeMin: 0, problem: null },
-  { hour: '02:00 - 03:00', ratio: 0.125, dhu: 1.2, downtimeMin: 0, problem: null },
-  { hour: '03:00 - 04:00', ratio: 0.125, dhu: 0.0, downtimeMin: 0, problem: null },
-  { hour: '04:00 - 05:00', ratio: 0.0375, dhu: 0.0, downtimeMin: 0, problem: null }
+const SHIFT_PRESETS = [
+  { key: 'DAY', label: 'Shift A (Day)', startTime: '08:00' },
+  { key: 'EVENING', label: 'Shift B (Evening)', startTime: '16:00' },
+  { key: 'NIGHT', label: 'Shift C (Night)', startTime: '00:00' }
 ]
+
+const DEFAULT_SLOT_TEMPLATES = [
+  { ratio: 0.1125, dhu: 1.6, downtimeMin: 2, problem: 'MACHINE PROBLEM' },
+  { ratio: 0.125, dhu: 1.4, downtimeMin: 0, problem: null },
+  { ratio: 0.125, dhu: 1.9, downtimeMin: 3, problem: 'INPUT DELAY' },
+  { ratio: 0.125, dhu: 1.3, downtimeMin: 0, problem: null },
+  { ratio: 0.1, dhu: 1.5, downtimeMin: 2, problem: 'RIB SHADE' },
+  { ratio: 0.125, dhu: 1.4, downtimeMin: 0, problem: null },
+  { ratio: 0.125, dhu: 1.2, downtimeMin: 0, problem: null },
+  { ratio: 0.125, dhu: 0.0, downtimeMin: 0, problem: null },
+  { ratio: 0.0375, dhu: 0.0, downtimeMin: 0, problem: null }
+]
+
+function parseTimeToMinutes(timeStr = '08:00') {
+  const match = String(timeStr || '').trim().match(/^(\d{1,2}):(\d{2})$/)
+  if (!match) return 8 * 60
+  const hh = Math.max(0, Math.min(23, Number(match[1]) || 0))
+  const mm = Math.max(0, Math.min(59, Number(match[2]) || 0))
+  return hh * 60 + mm
+}
+
+function formatMinutesToHHMM(totalMins) {
+  const wrapped = (((Math.round(totalMins) % 1440) + 1440) % 1440)
+  const hh = String(Math.floor(wrapped / 60)).padStart(2, '0')
+  const mm = String(wrapped % 60).padStart(2, '0')
+  return `${hh}:${mm}`
+}
+
+function calcEndTimeFromStart(startTime = '08:00', durationHours = SHIFT_DURATION_HOURS) {
+  const startMin = parseTimeToMinutes(startTime)
+  const durationMins = Math.round((Number(durationHours) || SHIFT_DURATION_HOURS) * 60)
+  return formatMinutesToHHMM(startMin + durationMins)
+}
+
+function getDurationMinutes(startTime = '08:00', endTime = null) {
+  const startMin = parseTimeToMinutes(startTime)
+  const resolvedEnd = endTime || calcEndTimeFromStart(startTime, SHIFT_DURATION_HOURS)
+  let endMin = parseTimeToMinutes(resolvedEnd)
+  if (endMin <= startMin) {
+    endMin += 1440
+  }
+  const diff = endMin - startMin
+  return diff > 0 ? diff : SHIFT_DURATION_MINS
+}
+
+function calcShiftDurationHours(startTime = '08:00', endTime = null) {
+  return Number((getDurationMinutes(startTime, endTime) / 60).toFixed(2))
+}
+
+function buildShiftSlotsFromRange(startTime = '08:00', endTime = null, customSlots = null) {
+  if (Array.isArray(customSlots) && customSlots.length > 0) {
+    return customSlots.map((slot, idx) => ({
+      hour: String(slot.hour || '').trim(),
+      ratio: Number(slot.ratio) || 1 / customSlots.length,
+      dhu: Number(slot.dhu) || 0,
+      downtimeMin: Number(slot.downtimeMin) || 0,
+      problem: slot.problem ?? null,
+      index: idx
+    }))
+  }
+
+  const effectiveEnd = endTime || calcEndTimeFromStart(startTime, SHIFT_DURATION_HOURS)
+  const startMin = parseTimeToMinutes(startTime)
+  let endMin = parseTimeToMinutes(effectiveEnd)
+  if (endMin <= startMin) {
+    endMin += 1440
+  }
+
+  const slots = []
+  let cursor = startMin
+  let idx = 0
+  while (cursor < endMin && slots.length < 24) {
+    const nextCursor = Math.min(endMin, cursor + 60)
+    const sliceMins = nextCursor - cursor
+    const label = `${formatMinutesToHHMM(cursor)} - ${formatMinutesToHHMM(nextCursor)}`
+    const template = DEFAULT_SLOT_TEMPLATES[idx % DEFAULT_SLOT_TEMPLATES.length]
+    const baseRatio =
+      idx < DEFAULT_SLOT_TEMPLATES.length
+        ? DEFAULT_SLOT_TEMPLATES[idx].ratio
+        : 0.1
+    const adjustedRatio = Number((baseRatio * (sliceMins / 60)).toFixed(4))
+
+    slots.push({
+      hour: label,
+      ratio: adjustedRatio > 0 ? adjustedRatio : 0.1,
+      dhu: template.dhu,
+      downtimeMin: template.downtimeMin,
+      problem: template.problem
+    })
+    cursor = nextCursor
+    idx += 1
+  }
+
+  if (!slots.length) {
+    return DEFAULT_SLOT_TEMPLATES.map((t, i) => ({
+      hour: `${String(8 + i).padStart(2, '0')}:00 - ${String(9 + i).padStart(2, '0')}:00`,
+      ...t
+    }))
+  }
+
+  const ratioSum = slots.reduce((s, r) => s + (Number(r.ratio) || 0), 0)
+  if (ratioSum > 0) {
+    let acc = 0
+    slots.forEach((slot, i) => {
+      if (i === slots.length - 1) {
+        slot.ratio = Number(Math.max(0.01, 1 - acc).toFixed(4))
+      } else {
+        const norm = Number((slot.ratio / ratioSum).toFixed(4))
+        slot.ratio = norm
+        acc += norm
+      }
+    })
+  }
+
+  return slots
+}
+
+function findActiveSlotIndexForNow(startTime = '08:00', slotCount = 9) {
+  if (slotCount <= 1) return 0
+  const now = new Date()
+  const nowMin = now.getHours() * 60 + now.getMinutes()
+  const startMin = parseTimeToMinutes(startTime)
+  let elapsed = nowMin - startMin
+  if (elapsed < 0) elapsed += 1440
+  const idx = Math.floor(elapsed / 60)
+  return Math.max(0, Math.min(slotCount - 1, idx))
+}
+
+const initialStart = '08:00'
+const initialEnd = calcEndTimeFromStart(initialStart, SHIFT_DURATION_HOURS)
+
+const shiftConfig = ref({
+  shiftName: 'Shift A (Day)',
+  startTime: initialStart,
+  endTime: initialEnd,
+  autoAlignActiveHour: false,
+  recalcHourlyTargets: true,
+  slots: buildShiftSlotsFromRange(initialStart, initialEnd)
+})
+
+const BASE_HOURS = computed(() => shiftConfig.value.slots)
+
+const isShiftModalOpen = ref(false)
+const shiftDraft = ref({
+  shiftName: 'Shift A (Day)',
+  startTime: initialStart,
+  endTime: initialEnd,
+  autoAlignActiveHour: false,
+  recalcHourlyTargets: true,
+  slots: []
+})
+
+const shiftDurationHours = computed(() =>
+  calcShiftDurationHours(shiftDraft.value.startTime, shiftDraft.value.endTime)
+)
+
+const shiftSlotRatioSum = computed(() =>
+  Number(
+    (shiftDraft.value.slots || [])
+      .reduce((sum, s) => sum + (Number(s.ratio) || 0), 0)
+      .toFixed(4)
+  )
+)
+
+function loadSavedShiftConfig() {
+  if (typeof window === 'undefined') return
+  try {
+    const raw = window.localStorage.getItem(SHIFT_STORAGE_KEY)
+    if (!raw) return
+    const parsed = JSON.parse(raw)
+    if (parsed && parsed.startTime) {
+      const cleanStart = /^(\d{1,2}):(\d{2})$/.test(String(parsed.startTime || '').trim())
+        ? formatMinutesToHHMM(parseTimeToMinutes(parsed.startTime))
+        : '08:00'
+      const computedEnd = calcEndTimeFromStart(cleanStart, SHIFT_DURATION_HOURS)
+
+      shiftConfig.value = {
+        shiftName: String(parsed.shiftName || 'Custom Shift'),
+        startTime: cleanStart,
+        endTime: computedEnd,
+        autoAlignActiveHour: Boolean(parsed.autoAlignActiveHour),
+        recalcHourlyTargets: parsed.recalcHourlyTargets !== false,
+        slots: buildShiftSlotsFromRange(
+          cleanStart,
+          computedEnd,
+          Array.isArray(parsed.slots) && parsed.slots.length ? parsed.slots : null
+        )
+      }
+    }
+  } catch (_) {
+    // Ignore invalid storage
+  }
+}
+
+function persistShiftConfig(cfg) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(SHIFT_STORAGE_KEY, JSON.stringify(cfg))
+  } catch (_) {
+    // Ignore storage quota errors
+  }
+}
+
+function openShiftControlModal() {
+  const cleanStart = shiftConfig.value.startTime || '08:00'
+  const computedEnd = calcEndTimeFromStart(cleanStart, SHIFT_DURATION_HOURS)
+  const currentSlots = shiftConfig.value.slots?.length
+    ? shiftConfig.value.slots
+    : buildShiftSlotsFromRange(cleanStart, computedEnd)
+
+  shiftDraft.value = {
+    shiftName: shiftConfig.value.shiftName || 'Shift A (Day)',
+    startTime: cleanStart,
+    endTime: computedEnd,
+    autoAlignActiveHour: Boolean(shiftConfig.value.autoAlignActiveHour),
+    recalcHourlyTargets: shiftConfig.value.recalcHourlyTargets !== false,
+    slots: currentSlots.map((s) => ({ ...s }))
+  }
+  isShiftModalOpen.value = true
+}
+
+function closeShiftControlModal() {
+  isShiftModalOpen.value = false
+}
+
+function onShiftStartTimeChange(nextStartRaw) {
+  const cleanStart = /^(\d{1,2}):(\d{2})$/.test(String(nextStartRaw || '').trim())
+    ? formatMinutesToHHMM(parseTimeToMinutes(nextStartRaw))
+    : '08:00'
+
+  shiftDraft.value.startTime = cleanStart
+  shiftDraft.value.endTime = calcEndTimeFromStart(cleanStart, SHIFT_DURATION_HOURS)
+
+  shiftDraft.value.slots = buildShiftSlotsFromRange(
+    shiftDraft.value.startTime,
+    shiftDraft.value.endTime
+  )
+}
+
+function applyShiftPreset(preset) {
+  const cleanStart = preset.startTime
+  const computedEnd = calcEndTimeFromStart(cleanStart, SHIFT_DURATION_HOURS)
+  shiftDraft.value.shiftName = preset.label
+  shiftDraft.value.startTime = cleanStart
+  shiftDraft.value.endTime = computedEnd
+  shiftDraft.value.slots = buildShiftSlotsFromRange(cleanStart, computedEnd)
+}
+
+function regenerateShiftSlotsFromTimes() {
+  shiftDraft.value.endTime = calcEndTimeFromStart(shiftDraft.value.startTime, SHIFT_DURATION_HOURS)
+  shiftDraft.value.slots = buildShiftSlotsFromRange(
+    shiftDraft.value.startTime,
+    shiftDraft.value.endTime
+  )
+}
+
+function normalizeDraftSlotRatiosEvenly() {
+  const list = shiftDraft.value.slots || []
+  if (!list.length) return
+  const evenRatio = Number((1 / list.length).toFixed(4))
+  let running = 0
+  list.forEach((slot, idx) => {
+    if (idx === list.length - 1) {
+      slot.ratio = Number(Math.max(0.0001, 1 - running).toFixed(4))
+    } else {
+      slot.ratio = evenRatio
+      running += evenRatio
+    }
+  })
+}
+
+function applyShiftConfigToLines(nextConfig) {
+  const slots = nextConfig.slots || []
+  const maxSlotIdx = Math.max(0, slots.length - 1)
+  const alignedSlotIdx = nextConfig.autoAlignActiveHour
+    ? findActiveSlotIndexForNow(nextConfig.startTime, slots.length)
+    : null
+
+  linesData.value.forEach((line, lIdx) => {
+    const dailyTarget = Number(line.dailyTarget) || 0
+    const existingRows = Array.isArray(line.hourlyRows) ? line.hourlyRows : []
+    const existingBySlotLabel = new Map(
+      existingRows.map((r) => [String(r.hour || '').trim(), r])
+    )
+    let remaining = dailyTarget
+
+    line.hourlyRows = slots.map((slot, idx) => {
+      const prev = existingBySlotLabel.get(String(slot.hour || '').trim()) || existingRows[idx]
+      const isLast = idx === slots.length - 1
+      const computedTarget = isLast
+        ? Math.max(0, remaining)
+        : Math.round(dailyTarget * (Number(slot.ratio) || 1 / slots.length))
+      remaining -= computedTarget
+
+      const target =
+        nextConfig.recalcHourlyTargets || !prev ? computedTarget : Number(prev.target) || 0
+
+      const actual = prev ? Math.max(0, Math.round(Number(prev.actual) || 0)) : 0
+      const dhu = prev ? Math.max(0, Number(prev.dhu) || 0) : actual > 0 ? slot.dhu : 0
+      const qcPass = prev
+        ? Math.min(
+            actual,
+            Math.max(0, Math.round(Number(prev.qcPass) ?? calcHourQcPass(actual, dhu)))
+          )
+        : calcHourQcPass(actual, dhu)
+      const downtimeMin = prev ? Math.max(0, Number(prev.downtimeMin) || 0) : 0
+      const nptProblems = prev
+        ? normalizeNptProblems(
+            prev.nptProblems,
+            downtimeMin,
+            slot.problem || NPT_PROBLEM_TYPES[(lIdx + idx) % NPT_PROBLEM_TYPES.length],
+            lIdx,
+            idx
+          )
+        : []
+
+      return {
+        hour: slot.hour,
+        target,
+        actual,
+        qcPass,
+        dhu,
+        downtimeMin,
+        nptProblems
+      }
+    })
+
+    if (alignedSlotIdx !== null) {
+      line.activeHourIndex = alignedSlotIdx
+    } else {
+      line.activeHourIndex = Math.min(Math.max(0, Number(line.activeHourIndex) || 0), maxSlotIdx)
+    }
+  })
+}
+
+function saveShiftControl() {
+  const cleanStart = /^(\d{1,2}):(\d{2})$/.test(String(shiftDraft.value.startTime || '').trim())
+    ? formatMinutesToHHMM(parseTimeToMinutes(shiftDraft.value.startTime))
+    : '08:00'
+  const cleanEnd = calcEndTimeFromStart(cleanStart, SHIFT_DURATION_HOURS)
+  shiftDraft.value.endTime = cleanEnd
+
+  const cleanName = String(shiftDraft.value.shiftName || '').trim() || `${cleanStart} - ${cleanEnd}`
+
+  const validSlots =
+    Array.isArray(shiftDraft.value.slots) && shiftDraft.value.slots.length > 0
+      ? shiftDraft.value.slots.map((s, idx) => ({
+          hour: String(s.hour || '').trim() || `Slot ${idx + 1}`,
+          ratio: Math.max(0.0001, Number(s.ratio) || 1 / shiftDraft.value.slots.length),
+          dhu: Math.max(0, Number(s.dhu) || 0),
+          downtimeMin: Math.max(0, Number(s.downtimeMin) || 0),
+          problem: s.problem || null
+        }))
+      : buildShiftSlotsFromRange(cleanStart, cleanEnd)
+
+  const ratioSum = validSlots.reduce((acc, s) => acc + s.ratio, 0)
+  if (ratioSum > 0) {
+    let running = 0
+    validSlots.forEach((s, idx) => {
+      if (idx === validSlots.length - 1) {
+        s.ratio = Number(Math.max(0.0001, 1 - running).toFixed(4))
+      } else {
+        s.ratio = Number((s.ratio / ratioSum).toFixed(4))
+        running += s.ratio
+      }
+    })
+  }
+
+  const nextConfig = {
+    shiftName: cleanName,
+    startTime: cleanStart,
+    endTime: cleanEnd,
+    autoAlignActiveHour: Boolean(shiftDraft.value.autoAlignActiveHour),
+    recalcHourlyTargets: Boolean(shiftDraft.value.recalcHourlyTargets),
+    slots: validSlots
+  }
+
+  shiftConfig.value = nextConfig
+  persistShiftConfig(nextConfig)
+  applyShiftConfigToLines(nextConfig)
+
+  isShiftModalOpen.value = false
+  lastUpdated.value = new Date().toLocaleTimeString()
+  notify(`Start ${cleanStart} → End ${cleanEnd} (+${SHIFT_DURATION_HOURS}h) · ${cleanName}`)
+
+  sendToGasBackend('saveShiftConfig', {
+    shiftConfig: JSON.parse(JSON.stringify(nextConfig)),
+    lines: JSON.parse(JSON.stringify(linesData.value))
+  })
+}
 
 const BUYERS = [
   'Nordic Apparel',
@@ -136,9 +524,10 @@ function normalizeNptProblems(
 }
 
 function buildHourlyRows(dailyTarget, activeHourIndex = 6, lineIndex = 0) {
+  const slots = BASE_HOURS.value
   let remaining = dailyTarget
-  return BASE_HOURS.map((slot, idx) => {
-    const isLast = idx === BASE_HOURS.length - 1
+  return slots.map((slot, idx) => {
+    const isLast = idx === slots.length - 1
     const target = isLast
       ? Math.max(0, remaining)
       : Math.round(dailyTarget * slot.ratio)
@@ -197,21 +586,21 @@ function normalizeLineRows(rawRows, lineIndex = 0) {
 
 function aggregateProblemsFromRows(hourlyRows) {
   const map = {}
-    ; (hourlyRows || []).forEach((r, idx) => {
-      const mins = Math.max(0, Number(r.downtimeMin) || 0)
-      if (mins <= 0) return
-      const items = normalizeNptProblems(
-        r.nptProblems,
-        mins,
-        NPT_PROBLEM_TYPES[idx % NPT_PROBLEM_TYPES.length],
-        0,
-        idx
-      )
-      items.forEach((entry) => {
-        const key = entry.problem || 'MACHINE PROBLEM'
-        map[key] = (map[key] || 0) + (Number(entry.minutes) || 0)
-      })
+  ;(hourlyRows || []).forEach((r, idx) => {
+    const mins = Math.max(0, Number(r.downtimeMin) || 0)
+    if (mins <= 0) return
+    const items = normalizeNptProblems(
+      r.nptProblems,
+      mins,
+      NPT_PROBLEM_TYPES[idx % NPT_PROBLEM_TYPES.length],
+      0,
+      idx
+    )
+    items.forEach((entry) => {
+      const key = entry.problem || 'MACHINE PROBLEM'
+      map[key] = (map[key] || 0) + (Number(entry.minutes) || 0)
     })
+  })
   return Object.entries(map)
     .map(([problem, minutes]) => ({ problem, minutes }))
     .sort((a, b) => b.minutes - a.minutes)
@@ -220,7 +609,7 @@ function aggregateProblemsFromRows(hourlyRows) {
 function mergeProblemSummaries(summaries) {
   const map = {}
   summaries.forEach((list) => {
-    ; (list || []).forEach((item) => {
+    ;(list || []).forEach((item) => {
       const key = item.problem || 'MACHINE PROBLEM'
       map[key] = (map[key] || 0) + (Number(item.minutes) || 0)
     })
@@ -300,7 +689,6 @@ let simTimer = null
 let toastTimer = null
 let clockTimer = null
 
-// Popup Modal State: Select Unit -> Select Line under Unit -> Auto-add 1 row
 const isPopupOpen = ref(false)
 const excelGridRef = ref(null)
 const popupDraft = ref({
@@ -310,11 +698,6 @@ const popupDraft = ref({
   lines: []
 })
 
-// Step-by-Step QR Entry & Camera State:
-// 1. Open QR Entry Form -> Select Option
-// 2. Show only 1 Output Entry field
-// 3. Enter Output -> Click Scan QR
-// 4. Scan QR -> Insert data with line & scan time
 const isQrModalOpen = ref(false)
 const selectedQrOption = ref('')
 const isOutputEntered = ref(false)
@@ -369,19 +752,19 @@ function normalizeLineIdFromLabel(label, fallbackIdx = 0) {
 function mapSheetRowToLine(rawRow, fallbackIdx = 0, existingLine = null) {
   const unitName = String(
     rawRow?.Unit ??
-    rawRow?.unit ??
-    rawRow?.unitName ??
-    existingLine?.unit ??
-    getUnitForLineIndex(fallbackIdx)
+      rawRow?.unit ??
+      rawRow?.unitName ??
+      existingLine?.unit ??
+      getUnitForLineIndex(fallbackIdx)
   ).trim()
 
   const lineLabel = String(
     rawRow?.Line_No ??
-    rawRow?.line_no ??
-    rawRow?.lineNo ??
-    rawRow?.lineName ??
-    existingLine?.lineName ??
-    `Line ${String(fallbackIdx + 1).padStart(2, '0')}`
+      rawRow?.line_no ??
+      rawRow?.lineNo ??
+      rawRow?.lineName ??
+      existingLine?.lineName ??
+      `Line ${String(fallbackIdx + 1).padStart(2, '0')}`
   ).trim()
 
   const id = String(
@@ -395,10 +778,10 @@ function mapSheetRowToLine(rawRow, fallbackIdx = 0, existingLine = null) {
   const dailyTarget =
     Number(
       rawRow?.dailyTarget ??
-      rawRow?.Daily_Target ??
-      rawRow?.target ??
-      existingLine?.dailyTarget ??
-      1400
+        rawRow?.Daily_Target ??
+        rawRow?.target ??
+        existingLine?.dailyTarget ??
+        1400
     ) || 1400
 
   const activeHourIndex =
@@ -428,10 +811,10 @@ function mapSheetRowToLine(rawRow, fallbackIdx = 0, existingLine = null) {
     styleNo,
     itemName: String(
       rawRow?.itemName ??
-      rawRow?.Item_name ??
-      rawRow?.Item_Name ??
-      existingLine?.itemName ??
-      inferItemName(styleNo)
+        rawRow?.Item_name ??
+        rawRow?.Item_Name ??
+        existingLine?.itemName ??
+        inferItemName(styleNo)
     ).trim(),
     modelNo: String(
       rawRow?.modelNo ?? rawRow?.Model_No ?? existingLine?.modelNo ?? 'MOD-ALPHA-V2'
@@ -448,10 +831,10 @@ function mapSheetRowToLine(rawRow, fallbackIdx = 0, existingLine = null) {
     targetEfficiency:
       Number(
         rawRow?.targetEfficiency ??
-        rawRow?.Target_Efficiency ??
-        rawRow?.target_efficiency ??
-        existingLine?.targetEfficiency ??
-        75
+          rawRow?.Target_Efficiency ??
+          rawRow?.target_efficiency ??
+          existingLine?.targetEfficiency ??
+          75
       ) || 75,
     maxLineGap: Number(rawRow?.maxLineGap ?? existingLine?.maxLineGap ?? 60) || 60,
     firstMachineTotal:
@@ -518,14 +901,14 @@ function extractItemNameFromRow(row) {
   if (!row || typeof row !== 'object') return ''
   return String(
     row.Item_name ??
-    row.Item_Name ??
-    row.itemName ??
-    row.item_name ??
-    row.Item ??
-    row.item ??
-    row.Name ??
-    row.name ??
-    ''
+      row.Item_Name ??
+      row.itemName ??
+      row.item_name ??
+      row.Item ??
+      row.item ??
+      row.Name ??
+      row.name ??
+      ''
   ).trim()
 }
 
@@ -593,6 +976,7 @@ async function sendToGasBackend(action, payload, { silent = false } = {}) {
       body: JSON.stringify({
         action,
         payload,
+        shiftConfig: shiftConfig.value,
         displayMeta: currentDisplayMeta.value
       })
     })
@@ -621,7 +1005,10 @@ async function manualSyncBoardToGas() {
   try {
     const res = await sendToGasBackend(
       'syncBoardSnapshot',
-      { lines: JSON.parse(JSON.stringify(linesData.value)) },
+      {
+        shiftConfig: JSON.parse(JSON.stringify(shiftConfig.value)),
+        lines: JSON.parse(JSON.stringify(linesData.value))
+      },
       { silent: false }
     )
     if (res && res.ok) {
@@ -895,9 +1282,9 @@ function isRowPopulated(row) {
   if (!row) return false
   return Boolean(
     String(row.lineId || '').trim() ||
-    String(row.lineName || '').trim() ||
-    String(row.poNo || '').trim() ||
-    String(row.styleNo || '').trim()
+      String(row.lineName || '').trim() ||
+      String(row.poNo || '').trim() ||
+      String(row.styleNo || '').trim()
   )
 }
 
@@ -908,8 +1295,8 @@ const popupTotals = computed(() => {
   const dailyTarget = rows.reduce((s, r) => s + (Number(r.dailyTarget) || 0), 0)
   const avgTargetEff = rows.length
     ? (
-      rows.reduce((s, r) => s + (Number(r.targetEfficiency) || 75), 0) / rows.length
-    ).toFixed(1)
+        rows.reduce((s, r) => s + (Number(r.targetEfficiency) || 75), 0) / rows.length
+      ).toFixed(1)
     : '75.0'
   return {
     totalLines: rows.length,
@@ -925,6 +1312,7 @@ function saveLinePopup() {
   const targetUnit = String(popupDraft.value.unit || '').trim() || 'Unit 01'
   const populatedRows = popupDraft.value.lines.filter(isRowPopulated)
   const updatedLines = []
+  const slots = BASE_HOURS.value
 
   populatedRows.forEach((draftRow, rowIdx) => {
     const cleanLineName =
@@ -970,8 +1358,8 @@ function saveLinePopup() {
         dailyTarget: cleanTarget,
         maxLineGap: 60,
         firstMachineTotal: 0,
-        activeHourIndex: 6,
-        hourlyRows: buildHourlyRows(cleanTarget, 6, globalIdx)
+        activeHourIndex: Math.min(6, Math.max(0, slots.length - 1)),
+        hourlyRows: buildHourlyRows(cleanTarget, Math.min(6, Math.max(0, slots.length - 1)), globalIdx)
       }
       linesData.value.push(line)
       lineIdx = linesData.value.length - 1
@@ -992,7 +1380,7 @@ function saveLinePopup() {
     if (popupDraft.value.recalcHourlyTargets) {
       let remaining = cleanTarget
       line.hourlyRows.forEach((row, idx) => {
-        const slot = BASE_HOURS[idx] || { ratio: 1 / line.hourlyRows.length }
+        const slot = slots[idx] || { ratio: 1 / line.hourlyRows.length }
         const isLast = idx === line.hourlyRows.length - 1
         const nextTarget = isLast
           ? Math.max(0, remaining)
@@ -1036,13 +1424,15 @@ async function startQrCamera() {
   await stopQrCamera()
   await nextTick()
 
+  const boxSize = Math.max(160, Math.min(220, viewportWidth.value - 96))
+
   try {
     html5QrScanner = new Html5Qrcode('qr-camera-reader')
     isCameraActive.value = true
 
     await html5QrScanner.start(
       { facingMode: 'environment' },
-      { fps: 10, qrbox: { width: 220, height: 220 } },
+      { fps: 10, qrbox: { width: boxSize, height: boxSize } },
       async (decodedText) => {
         qrScanInput.value = decodedText
         await stopQrCamera()
@@ -1090,11 +1480,12 @@ async function openQrEntryPopup() {
   const defaultLine = !isAllLines.value
     ? currentLine.value
     : linesInSelectedUnit.value[0] || linesData.value[0]
+  const maxIdx = Math.max(0, BASE_HOURS.value.length - 1)
 
   await resetQrFlowState(false)
   qrEntryOut.value = {
     lineId: defaultLine?.id || 'line-01',
-    hourIndex: Math.min(Math.max(0, defaultLine?.activeHourIndex ?? 6), 8),
+    hourIndex: Math.min(Math.max(0, defaultLine?.activeHourIndex ?? 0), maxIdx),
     qty: null,
     qcPass: null,
     dhu: 1.2,
@@ -1126,8 +1517,6 @@ async function onQrOptionDropdownChange(optionKey) {
   qrEntryOut.value.station = meta?.defaultStation || ''
   isOutputEntered.value = Boolean(optionKey)
   qrScanFeedback.value = optionKey
-    ? `Option "${meta?.label}" selected. Enter output quantity, then click "Scan QR".`
-    : ''
 }
 
 function handleOutputEntryChange() {
@@ -1152,7 +1541,9 @@ async function openScanAfterOutput() {
   isQrScanned.value = false
   qrScanFeedback.value = `Output entered. Scan QR code now for ${activeOptionMeta.value?.label}.`
   await nextTick()
-  qrScannerInputRef.value?.focus()
+  if (displayMode.value !== 'compact') {
+    qrScannerInputRef.value?.focus()
+  }
   await startQrCamera()
 }
 
@@ -1527,11 +1918,11 @@ function buildUnitSubtotalRow(unitName, unitLines) {
     : 0
   const targetEffAvg = lineCount
     ? Number(
-      (
-        activeUnitLines.reduce((s, l) => s + (Number(l.targetEfficiency) || 75), 0) /
-        lineCount
-      ).toFixed(1)
-    )
+        (
+          activeUnitLines.reduce((s, l) => s + (Number(l.targetEfficiency) || 75), 0) /
+          lineCount
+        ).toFixed(1)
+      )
     : 75
 
   return {
@@ -1938,12 +2329,14 @@ function toggleSimulation() {
 
 function handleGlobalKeydown(e) {
   if (e.key === 'Escape') {
+    if (isShiftModalOpen.value) closeShiftControlModal()
     if (isQrModalOpen.value) closeQrEntryPopup()
     if (isPopupOpen.value) closeLinePopup()
   }
 }
 
 onMounted(async () => {
+  loadSavedShiftConfig()
   updateViewportSize()
   const nowStr = new Date().toLocaleTimeString()
   lastUpdated.value = nowStr
@@ -1969,8 +2362,12 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="board-shell" :class="`mode-${displayMode}`" :data-display-mode="displayMode"
-    :data-orientation="isPortrait ? 'portrait' : 'landscape'">
+  <div
+    class="board-shell"
+    :class="`mode-${displayMode}`"
+    :data-display-mode="displayMode"
+    :data-orientation="isPortrait ? 'portrait' : 'landscape'"
+  >
     <transition name="fade">
       <div v-if="toastMessage" class="toast-banner">{{ toastMessage }}</div>
     </transition>
@@ -1982,16 +2379,24 @@ onUnmounted(() => {
           <span class="pulse-dot"></span>
           {{ isLiveSimulating ? 'LIVE STREAMING' : 'BOARD READY' }}
         </span>
-        <select :value="selectedUnit" aria-label="Select Unit" class="unit-select"
-          @change="selectUnit($event.target.value)">
+        <select
+          :value="selectedUnit"
+          aria-label="Select Unit"
+          class="unit-select"
+          @change="selectUnit($event.target.value)"
+        >
           <option value="ALL">All Units ({{ linesData.length }})</option>
           <option v-for="u in unitOptions" :key="u" :value="u">
             {{ u }}
           </option>
         </select>
 
-        <select :value="selectedLineId" aria-label="Jump directly to a specific line" class="line-select"
-          @change="onLineSelectChange($event.target.value)">
+        <select
+          :value="selectedLineId"
+          aria-label="Jump directly to a specific line"
+          class="line-select"
+          @change="onLineSelectChange($event.target.value)"
+        >
           <option value="ALL">
             {{
               selectedUnit === 'ALL'
@@ -2004,15 +2409,29 @@ onUnmounted(() => {
           </option>
         </select>
 
-        <input v-if="isAllLines" v-model="searchQuery" type="search" aria-label="Search PO, Style, Item, Line or Buyer"
-          placeholder="Search PO, Style, Item, Line..." class="search-input" />
+        <input
+          v-if="isAllLines"
+          v-model="searchQuery"
+          type="search"
+          aria-label="Search PO, Style, Item, Line or Buyer"
+          placeholder="Search PO, Style, Item, Line..."
+          class="search-input"
+        />
 
-        <button v-if="!isAllLines && currentLine" type="button" class="pill-btn" @click="openLinePopup(currentLine.id)">
+        <button
+          v-if="!isAllLines && currentLine"
+          type="button"
+          class="pill-btn"
+          @click="openLinePopup(currentLine.id)"
+        >
           Edit {{ currentLine.unit }} Lines
         </button>
       </div>
 
       <div class="header-actions">
+        <button type="button" class="btn btn-shift" @click="openShiftControlModal">
+          Shift Control ({{ shiftConfig.startTime }}–{{ shiftConfig.endTime }})
+        </button>
         <button type="button" class="btn btn-popup" @click="openLinePopup()">
           + Unit &amp; Lines Popup
         </button>
@@ -2024,16 +2443,30 @@ onUnmounted(() => {
         </button>
         <button type="button" class="btn btn-soft" @click="advanceHour">Next Hour</button>
         <button type="button" class="btn btn-outline" @click="resetShift">Reset</button>
-        <button type="button" class="btn btn-soft" :disabled="isSyncingGas" @click="manualSyncBoardToGas">
+        <button
+          type="button"
+          class="btn btn-soft"
+          :disabled="isSyncingGas"
+          @click="manualSyncBoardToGas"
+        >
           {{ isSyncingGas ? 'Syncing...' : 'Sync to GAS' }}
         </button>
         <div class="filter-controls">
-          <button v-if="isAllLines" type="button" class="filter-toggle" :class="{ active: onlyActiveLines }"
-            @click="onlyActiveLines = !onlyActiveLines">
+          <button
+            v-if="isAllLines"
+            type="button"
+            class="filter-toggle"
+            :class="{ active: onlyActiveLines }"
+            @click="onlyActiveLines = !onlyActiveLines"
+          >
             Active Only
           </button>
-          <button type="button" class="filter-toggle" :class="{ active: onlyGapAlerts }"
-            @click="onlyGapAlerts = !onlyGapAlerts">
+          <button
+            type="button"
+            class="filter-toggle"
+            :class="{ active: onlyGapAlerts }"
+            @click="onlyGapAlerts = !onlyGapAlerts"
+          >
             Gap Alerts ({{ alertLinesCount }})
           </button>
         </div>
@@ -2044,6 +2477,10 @@ onUnmounted(() => {
     <header class="board-header">
       <div class="header-left">
         <div class="status-strip">
+          <span class="chip chip-shift">
+            {{ shiftConfig.shiftName }} · {{ shiftConfig.startTime }} – {{ shiftConfig.endTime }}
+            (+{{ SHIFT_DURATION_HOURS }}h · {{ BASE_HOURS.length }} slots)
+          </span>
           <span class="chip">Line Target: {{ totalDailyTarget.toLocaleString() }} pcs</span>
           <span class="chip">Target Eff: {{ targetEfficiency }}%</span>
           <span class="chip chip-qc">
@@ -2076,7 +2513,9 @@ onUnmounted(() => {
               <strong>+ Unit &amp; Lines Popup</strong> to enter lines · Updated {{ lastUpdated }}
             </template>
             <template v-else>
-              Active <strong>{{ activeLinesCount }}/{{ scopedLineMetrics.length }}</strong> lines · Target Eff
+              <strong>{{ shiftConfig.shiftName }}</strong> ({{ shiftConfig.startTime }} –
+              {{ shiftConfig.endTime }}, +{{ SHIFT_DURATION_HOURS }}h) · Active
+              <strong>{{ activeLinesCount }}/{{ scopedLineMetrics.length }}</strong> lines · Target Eff
               <strong>{{ targetEfficiency }}%</strong> · Target
               <strong>{{ totalDailyTarget.toLocaleString() }} pcs</strong> · NPT
               <strong>{{ totalNptMinutes.toLocaleString() }} min</strong> · QC Pass
@@ -2084,10 +2523,12 @@ onUnmounted(() => {
             </template>
           </template>
           <template v-else-if="currentLine && currentLineMetrics">
-            <strong>{{ currentLine.unit }}</strong> · Item <strong>{{ currentLine.itemName }}</strong> · PO
+            <strong>{{ currentLine.unit }}</strong> · {{ shiftConfig.shiftName }} ({{
+              shiftConfig.startTime
+            }}–{{ shiftConfig.endTime }}) · Item <strong>{{ currentLine.itemName }}</strong> · PO
             <strong>{{ currentLine.poNo }}</strong> · Style <strong>{{ currentLine.styleNo }}</strong> · SMV
-            <strong>{{ currentLine.smv }}m</strong> · Target Eff <strong>{{ currentLineMetrics.targetEfficiency
-            }}%</strong> · Updated {{ lastUpdated }}
+            <strong>{{ currentLine.smv }}m</strong> · Target Eff
+            <strong>{{ currentLineMetrics.targetEfficiency }}%</strong> · Updated {{ lastUpdated }}
           </template>
         </p>
       </div>
@@ -2098,9 +2539,193 @@ onUnmounted(() => {
       </div>
     </header>
 
+    <!-- Shift Control Settings Modal -->
+    <div
+      v-if="isShiftModalOpen"
+      class="modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="shift-control-modal-title"
+      @click.self="closeShiftControlModal"
+    >
+      <div class="modal-card shift-modal-card">
+        <div class="modal-head">
+          <div>
+            <span class="modal-badge shift-modal-badge">SHIFT CONTROL</span>
+            <span id="shift-control-modal-title" class="xl-sheet-tab">
+              {{ shiftDraft.startTime }} – {{ shiftDraft.endTime }} (+{{ SHIFT_DURATION_HOURS }}h)
+            </span>
+          </div>
+          <button
+            type="button"
+            class="modal-close-btn"
+            aria-label="Close shift control popup"
+            @click="closeShiftControlModal"
+          >
+            ✕
+          </button>
+        </div>
+
+        <form class="modal-form" @submit.prevent="saveShiftControl">
+          <div class="shift-preset-row">
+            <span class="preset-label">Quick Presets:</span>
+            <button
+              v-for="preset in SHIFT_PRESETS"
+              :key="preset.key"
+              type="button"
+              class="preset-chip"
+              :class="{
+                'preset-chip-active': shiftDraft.startTime === preset.startTime
+              }"
+              @click="applyShiftPreset(preset)"
+            >
+              {{ preset.label }} ({{ preset.startTime }} →
+              {{ calcEndTimeFromStart(preset.startTime, SHIFT_DURATION_HOURS) }})
+            </button>
+          </div>
+
+          <div class="shift-time-grid">
+            <label class="field-group">
+              <span>Shift Name</span>
+              <input
+                v-model="shiftDraft.shiftName"
+                type="text"
+                class="form-input"
+                placeholder="Shift A (Day)"
+                required
+              />
+            </label>
+
+            <label class="field-group">
+              <span>Shift Start Time</span>
+              <input
+                :value="shiftDraft.startTime"
+                type="time"
+                class="form-input"
+                required
+                @change="onShiftStartTimeChange($event.target.value)"
+              />
+            </label>
+
+            <label class="field-group">
+              <span>End Time (+{{ SHIFT_DURATION_HOURS }}h / {{ SHIFT_DURATION_MINS }}m)</span>
+              <input
+                :value="shiftDraft.endTime"
+                type="text"
+                class="form-input"
+                readonly
+              />
+            </label>
+          </div>
+
+          <div class="shift-options-stack">
+            <label class="modal-checkbox">
+              <input v-model="shiftDraft.autoAlignActiveHour" type="checkbox" />
+              <span>Auto-select active hour slot matching current clock time</span>
+            </label>
+
+            <label class="modal-checkbox">
+              <input v-model="shiftDraft.recalcHourlyTargets" type="checkbox" />
+              <span>Recalculate hourly targets across all lines from each line's Daily Target</span>
+            </label>
+          </div>
+
+          <div class="shift-slots-toolbar">
+            <span class="muted-sm">
+              Slots: <strong>{{ shiftDraft.slots.length }}</strong> · End Time:
+              <strong>{{ shiftDraft.endTime }}</strong> (+{{ shiftDurationHours }}h) · Ratio Sum:
+              <strong :class="Math.abs(shiftSlotRatioSum - 1) < 0.02 ? 'tone-green' : 'tone-amber'">
+                {{ shiftSlotRatioSum }}
+              </strong>
+            </span>
+            <div class="row-actions">
+              <button
+                type="button"
+                class="act-btn act-inspect"
+                @click="regenerateShiftSlotsFromTimes"
+              >
+                Rebuild From Time
+              </button>
+              <button
+                type="button"
+                class="act-btn"
+                @click="normalizeDraftSlotRatiosEvenly"
+              >
+                Equal Ratios
+              </button>
+            </div>
+          </div>
+
+          <div class="shift-slots-table-wrap">
+            <table class="shift-slots-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Hour Slot</th>
+                  <th>Target Ratio</th>
+                  <th>Sample Target (1,400 pcs)</th>
+                  <th>Default DHU %</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(slot, sIdx) in shiftDraft.slots" :key="sIdx">
+                  <td class="xl-row-num">{{ sIdx + 1 }}</td>
+                  <td class="xl-cell">
+                    <input
+                      v-model="slot.hour"
+                      type="text"
+                      class="xl-input"
+                    />
+                  </td>
+                  <td class="xl-cell">
+                    <input
+                      v-model.number="slot.ratio"
+                      type="number"
+                      step="0.005"
+                      min="0.001"
+                      max="1"
+                      class="xl-input xl-num"
+                    />
+                  </td>
+                  <td class="xl-cell shift-preview-cell">
+                    {{ Math.round(1400 * (Number(slot.ratio) || 0)).toLocaleString() }} pcs
+                  </td>
+                  <td class="xl-cell">
+                    <input
+                      v-model.number="slot.dhu"
+                      type="number"
+                      step="0.1"
+                      min="0"
+                      max="100"
+                      class="xl-input xl-num"
+                    />
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="modal-footer">
+            <button type="button" class="btn btn-outline" @click="closeShiftControlModal">
+              Cancel
+            </button>
+            <button type="submit" class="btn btn-primary">
+              Apply Shift Time
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <!-- Single-Unit Header + Excel Grid Table Popup Modal -->
-    <div v-if="isPopupOpen" class="modal-backdrop" role="dialog" aria-modal="true"
-      aria-labelledby="line-setup-popup-title" @click.self="closeLinePopup">
+    <div
+      v-if="isPopupOpen"
+      class="modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="line-setup-popup-title"
+      @click.self="closeLinePopup"
+    >
       <div class="modal-card unit-popup-card">
         <div class="modal-head">
           <div>
@@ -2109,7 +2734,12 @@ onUnmounted(() => {
               {{ popupDraft.unit }} · Line Setup Sheet
             </span>
           </div>
-          <button type="button" class="modal-close-btn" aria-label="Close popup" @click="closeLinePopup">
+          <button
+            type="button"
+            class="modal-close-btn"
+            aria-label="Close popup"
+            @click="closeLinePopup"
+          >
             ✕
           </button>
         </div>
@@ -2118,8 +2748,11 @@ onUnmounted(() => {
           <div class="popup-unit-head-bar">
             <label class="field-group popup-unit-select-wrap">
               <span class="popup-unit-label">Unit:-</span>
-              <select :value="popupDraft.unit" class="form-select popup-unit-select"
-                @change="onPopupUnitChange($event.target.value)">
+              <select
+                :value="popupDraft.unit"
+                class="form-select popup-unit-select"
+                @change="onPopupUnitChange($event.target.value)"
+              >
                 <option v-for="u in unitOptions" :key="u" :value="u">
                   {{ u }}
                 </option>
@@ -2142,15 +2775,17 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <!-- Excel-style Name Box + Formula / Summary Strip -->
           <div class="xl-formula-bar">
             <span class="xl-name-box">fx</span>
             <span class="xl-formula-text">
               =SUM({{ popupDraft.unit }}) · Rows: <strong>{{ popupTotals.totalLines }}</strong> ·
               Avg Eff: <strong>{{ popupTotals.avgTargetEff }}%</strong> ·
-              Manpower: <strong>{{ popupTotals.operators }} Op + {{ popupTotals.helpers }} Hlp = {{ popupTotals.manpower
-              }}</strong> ·
-              Target: <strong>{{ popupTotals.dailyTarget.toLocaleString() }} pcs</strong>
+              Manpower:
+              <strong
+                >{{ popupTotals.operators }} Op + {{ popupTotals.helpers }} Hlp =
+                {{ popupTotals.manpower }}</strong
+              >
+              · Target: <strong>{{ popupTotals.dailyTarget.toLocaleString() }} pcs</strong>
             </span>
           </div>
 
@@ -2174,9 +2809,13 @@ onUnmounted(() => {
                 <tr v-for="(row, rIdx) in popupDraft.lines" :key="row.rowUid" class="xl-data-row">
                   <td class="xl-row-num">{{ rIdx + 1 }}</td>
                   <td class="xl-cell">
-                    <select :value="row.lineId" aria-label="Select Line under Unit" class="xl-select xl-w-line"
+                    <select
+                      :value="row.lineId"
+                      aria-label="Select Line under Unit"
+                      class="xl-select xl-w-line"
                       @change="onGridLineDropdownChange(rIdx, $event.target.value)"
-                      @keydown="handleExcelGridKeydown($event, rIdx, 0)">
+                      @keydown="handleExcelGridKeydown($event, rIdx, 0)"
+                    >
                       <option value="">-- Select Line --</option>
                       <option v-for="opt in popupUnitLineChoices" :key="opt.id" :value="opt.id">
                         {{ opt.lineName }}
@@ -2184,40 +2823,88 @@ onUnmounted(() => {
                     </select>
                   </td>
                   <td class="xl-cell">
-                    <input v-model="row.poNo" type="text" class="xl-input xl-w-po" placeholder="PO-44102"
-                      @keydown="handleExcelGridKeydown($event, rIdx, 1)" />
+                    <input
+                      v-model="row.poNo"
+                      type="text"
+                      class="xl-input xl-w-po"
+                      placeholder="PO-44102"
+                      @keydown="handleExcelGridKeydown($event, rIdx, 1)"
+                    />
                   </td>
                   <td class="xl-cell">
-                    <input v-model="row.styleNo" type="text" class="xl-input xl-w-style" placeholder="STY-7710-WVN"
-                      @keydown="handleExcelGridKeydown($event, rIdx, 2)" />
+                    <input
+                      v-model="row.styleNo"
+                      type="text"
+                      class="xl-input xl-w-style"
+                      placeholder="STY-7710-WVN"
+                      @keydown="handleExcelGridKeydown($event, rIdx, 2)"
+                    />
                   </td>
                   <td class="xl-cell">
-                    <select v-model="row.itemName" aria-label="Item Name" class="xl-select xl-w-item"
-                      @keydown="handleExcelGridKeydown($event, rIdx, 3)">
+                    <select
+                      v-model="row.itemName"
+                      aria-label="Item Name"
+                      class="xl-select xl-w-item"
+                      @keydown="handleExcelGridKeydown($event, rIdx, 3)"
+                    >
                       <option v-for="item in getRowItemChoices(row)" :key="item" :value="item">
                         {{ item }}
                       </option>
                     </select>
                   </td>
                   <td class="xl-cell">
-                    <input v-model.number="row.smv" type="number" min="0.1" step="0.1" class="xl-input xl-num xl-w-smv"
-                      @keydown="handleExcelGridKeydown($event, rIdx, 4)" />
+                    <input
+                      v-model.number="row.smv"
+                      type="number"
+                      inputmode="decimal"
+                      min="0.1"
+                      step="0.1"
+                      class="xl-input xl-num xl-w-smv"
+                      @keydown="handleExcelGridKeydown($event, rIdx, 4)"
+                    />
                   </td>
                   <td class="xl-cell">
-                    <input v-model.number="row.operators" type="number" min="0" class="xl-input xl-num xl-w-op"
-                      @keydown="handleExcelGridKeydown($event, rIdx, 5)" />
+                    <input
+                      v-model.number="row.operators"
+                      type="number"
+                      inputmode="numeric"
+                      min="0"
+                      class="xl-input xl-num xl-w-op"
+                      @keydown="handleExcelGridKeydown($event, rIdx, 5)"
+                    />
                   </td>
                   <td class="xl-cell">
-                    <input v-model.number="row.helpers" type="number" min="0" class="xl-input xl-num xl-w-hlp"
-                      @keydown="handleExcelGridKeydown($event, rIdx, 6)" />
+                    <input
+                      v-model.number="row.helpers"
+                      type="number"
+                      inputmode="numeric"
+                      min="0"
+                      class="xl-input xl-num xl-w-hlp"
+                      @keydown="handleExcelGridKeydown($event, rIdx, 6)"
+                    />
                   </td>
                   <td class="xl-cell">
-                    <input v-model.number="row.targetEfficiency" type="number" min="1" max="100" step="0.5"
-                      class="xl-input xl-num xl-w-eff" @keydown="handleExcelGridKeydown($event, rIdx, 7)" />
+                    <input
+                      v-model.number="row.targetEfficiency"
+                      type="number"
+                      inputmode="decimal"
+                      min="1"
+                      max="100"
+                      step="0.5"
+                      class="xl-input xl-num xl-w-eff"
+                      @keydown="handleExcelGridKeydown($event, rIdx, 7)"
+                    />
                   </td>
                   <td class="xl-cell">
-                    <input v-model.number="row.dailyTarget" type="number" min="0" step="50"
-                      class="xl-input xl-num xl-w-target" @keydown="handleExcelGridKeydown($event, rIdx, 8)" />
+                    <input
+                      v-model.number="row.dailyTarget"
+                      type="number"
+                      inputmode="numeric"
+                      min="0"
+                      step="50"
+                      class="xl-input xl-num xl-w-target"
+                      @keydown="handleExcelGridKeydown($event, rIdx, 8)"
+                    />
                   </td>
                 </tr>
               </tbody>
@@ -2234,8 +2921,11 @@ onUnmounted(() => {
               Unit: <strong>{{ popupDraft.unit }}</strong> · Rows Entered:
               <strong>{{ popupTotals.totalLines }}</strong> · Avg Target Eff:
               <strong>{{ popupTotals.avgTargetEff }}%</strong> · Manpower:
-              <strong>{{ popupTotals.operators }} Op / {{ popupTotals.helpers }} Hlp ({{ popupTotals.manpower
-              }})</strong>
+              <strong
+                >{{ popupTotals.operators }} Op / {{ popupTotals.helpers }} Hlp ({{
+                  popupTotals.manpower
+                }})</strong
+              >
             </span>
             <span>
               Total Target: <strong>{{ popupTotals.dailyTarget.toLocaleString() }} pcs</strong>
@@ -2244,38 +2934,50 @@ onUnmounted(() => {
 
           <div class="modal-footer">
             <button type="button" class="btn btn-outline" @click="closeLinePopup">Cancel</button>
-            <button type="submit" class="btn btn-primary">Save {{ popupDraft.unit }} Lines</button>
+            <button type="submit" class="btn btn-primary">
+              Save {{ popupDraft.unit }} Lines
+            </button>
           </div>
         </form>
       </div>
     </div>
 
     <!-- Step-by-Step QR Entry Popup Modal -->
-    <div v-if="isQrModalOpen" class="modal-backdrop" role="dialog" aria-modal="true"
-      aria-labelledby="qr-entry-popup-title" @click.self="closeQrEntryPopup">
+    <div
+      v-if="isQrModalOpen"
+      class="modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="qr-entry-popup-title"
+      @click.self="closeQrEntryPopup"
+    >
       <div class="modal-card qr-modal-card">
         <div class="modal-head">
           <div>
-            <span class="modal-badge qr-modal-badge">QR ENTRY POPUP FORM</span>
-            <h2 id="qr-entry-popup-title" class="modal-title">
-              Select Option → Enter Output → Scan QR → Insert with Line &amp; Scan Time
-            </h2>
+            <span class="modal-badge qr-modal-badge">QR ENTRY</span>
           </div>
-          <button type="button" class="modal-close-btn" aria-label="Close QR popup" @click="closeQrEntryPopup">
+          <button
+            type="button"
+            class="modal-close-btn"
+            aria-label="Close QR popup"
+            @click="closeQrEntryPopup"
+          >
             ✕
           </button>
         </div>
 
-        <!-- STEP 1: SELECT OPTION -->
         <div class="qr-step-block">
           <div class="qr-step-header">
-            <span class="step-pill">STEP 1</span>
             <span class="qr-step-title">Select QR Code Option</span>
           </div>
 
           <div class="qr-option-select-row">
-            <select :value="selectedQrOption" aria-label="QR Code Option" class="form-select qr-option-dropdown"
-              @change="onQrOptionDropdownChange($event.target.value)">
+            <select
+              :value="selectedQrOption"
+              aria-label="QR Code Option"
+              class="form-select qr-option-dropdown"
+              @change="onQrOptionDropdownChange($event.target.value)"
+            >
               <option value="">-- Select QR Code Option --</option>
               <option v-for="opt in QR_OPTIONS" :key="opt.key" :value="opt.key">
                 {{ opt.label }} ({{ opt.badge }})
@@ -2284,13 +2986,10 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- STEP 2: ONLY ONE OUTPUT ENTRY FIELD -->
         <div v-if="selectedQrOption && isOutputEntered" class="qr-step-block qr-entry-out-box">
           <div class="qr-step-header">
-            <span class="step-pill step-pill-out">STEP 2 · OUTPUT ENTRY</span>
+            <span class="step-pill step-pill-out">OUTPUT ENTRY</span>
             <span class="qr-step-title">
-              Enter Output for <strong>{{ activeOptionMeta?.label }}</strong> · Line:
-              <strong>{{ scannedLineLabel || qrTargetLine.lineName }}</strong>
               <template v-if="scannedAtTime">
                 · Scan Time: <strong>{{ scannedAtTime }}</strong>
               </template>
@@ -2299,31 +2998,61 @@ onUnmounted(() => {
 
           <div class="qr-single-field-row">
             <label v-if="selectedQrOption === 'FIRST_MC'" class="field-group qr-single-field">
-              <span>Output Entry (1st M/C pcs)</span>
-              <input v-model.number="qrEntryOut.qty" type="number" min="1" placeholder="Enter 1st M/C pcs"
-                class="form-input" required @input="handleOutputEntryChange" />
+              <span>Output Entry</span>
+              <input
+                v-model.number="qrEntryOut.qty"
+                type="number"
+                inputmode="numeric"
+                pattern="[0-9]*"
+                min="1"
+                placeholder="Enter 1st M/C pcs"
+                class="form-input"
+                required
+                @input="handleOutputEntryChange"
+              />
             </label>
 
             <label v-else-if="selectedQrOption === 'LAST_MC'" class="field-group qr-single-field">
               <span>Output Entry (Last M/C pcs)</span>
-              <input v-model.number="qrEntryOut.qty" type="number" min="1" placeholder="Enter Last M/C pcs"
-                class="form-input" required @input="handleOutputEntryChange" />
+              <input
+                v-model.number="qrEntryOut.qty"
+                type="number"
+                inputmode="numeric"
+                pattern="[0-9]*"
+                min="1"
+                placeholder="Enter Last M/C pcs"
+                class="form-input"
+                required
+                @input="handleOutputEntryChange"
+              />
             </label>
 
             <label v-else-if="selectedQrOption === 'QC_PASS'" class="field-group qr-single-field">
               <span>Output Entry (QC Pass pcs)</span>
-              <input v-model.number="qrEntryOut.qcPass" type="number" min="1" placeholder="Enter QC Pass pcs"
-                class="form-input" required @input="handleOutputEntryChange" />
+              <input
+                v-model.number="qrEntryOut.qcPass"
+                type="number"
+                inputmode="numeric"
+                pattern="[0-9]*"
+                min="1"
+                placeholder="Enter QC Pass pcs"
+                class="form-input"
+                required
+                @input="handleOutputEntryChange"
+              />
             </label>
 
-            <button type="button" class="btn btn-primary btn-sm" :disabled="!hasValidOutputEntry"
-              @click="openScanAfterOutput">
+            <button
+              type="button"
+              class="btn btn-primary btn-sm qr-action-btn"
+              :disabled="!hasValidOutputEntry"
+              @click="openScanAfterOutput"
+            >
               Scan QR →
             </button>
           </div>
         </div>
 
-        <!-- STEP 3: SCAN QR & INSERT DATA WITH LINE & SCAN TIME -->
         <div v-if="selectedQrOption && isScanStepVisible" class="qr-step-block">
           <div class="qr-step-header">
             <span class="step-pill">STEP 3 · SCAN QR</span>
@@ -2333,15 +3062,26 @@ onUnmounted(() => {
           </div>
 
           <div class="qr-scan-row">
-            <input ref="qrScannerInputRef" v-model="qrScanInput" type="text" class="form-input"
-              :placeholder="`Scan ${activeOptionMeta?.label} QR (e.g. QR|L04|BUNDLE-210) & press Enter...`"
-              @keydown.enter.prevent="confirmQrScan()" />
-            <button type="button" class="btn btn-qr btn-sm" @click="isCameraActive ? stopQrCamera() : startQrCamera()">
-              {{ isCameraActive ? 'Stop Camera' : 'Open Camera' }}
-            </button>
-            <button type="button" class="btn btn-primary btn-sm" @click="confirmQrScan()">
-              Insert Scan
-            </button>
+            <input
+              ref="qrScannerInputRef"
+              v-model="qrScanInput"
+              type="text"
+              class="form-input"
+              :placeholder="`Scan ${activeOptionMeta?.label} QR (e.g. QR|L04|BUNDLE-210)`"
+              @keydown.enter.prevent="confirmQrScan()"
+            />
+            <div class="qr-scan-btn-group">
+              <button
+                type="button"
+                class="btn btn-qr btn-sm"
+                @click="isCameraActive ? stopQrCamera() : startQrCamera()"
+              >
+                {{ isCameraActive ? 'Stop Camera' : 'Open Camera' }}
+              </button>
+              <button type="button" class="btn btn-primary btn-sm" @click="confirmQrScan()">
+                Insert Scan
+              </button>
+            </div>
           </div>
 
           <div v-if="cameraError" class="qr-feedback-bar">{{ cameraError }}</div>
@@ -2349,10 +3089,18 @@ onUnmounted(() => {
 
           <div class="qr-quick-samples">
             <span class="preset-label">Quick Sample Scan:</span>
-            <button type="button" class="preset-chip" @click="confirmQrScan('QR|L04|BUNDLE-210')">
+            <button
+              type="button"
+              class="preset-chip"
+              @click="confirmQrScan('QR|L04|BUNDLE-210')"
+            >
               Scan L04
             </button>
-            <button type="button" class="preset-chip" @click="confirmQrScan('QR|L02|BUNDLE-118')">
+            <button
+              type="button"
+              class="preset-chip"
+              @click="confirmQrScan('QR|L02|BUNDLE-118')"
+            >
               Scan L02
             </button>
           </div>
@@ -2416,7 +3164,10 @@ onUnmounted(() => {
 
       <div class="kpi-box kpi-qc-var">
         <span class="kpi-title">Last → QC Variance</span>
-        <div class="kpi-metric" :class="totalLastToQcVariance > 0 ? 'tone-amber' : 'tone-green'">
+        <div
+          class="kpi-metric"
+          :class="totalLastToQcVariance > 0 ? 'tone-amber' : 'tone-green'"
+        >
           {{ totalLastToQcVariance.toLocaleString() }}
           <span class="kpi-denom">pcs</span>
         </div>
@@ -2429,7 +3180,9 @@ onUnmounted(() => {
           {{ totalNptMinutes.toLocaleString() }}
           <span class="kpi-denom">min</span>
         </div>
-        <span class="kpi-hint">Est. Loss: {{ formatPcsValue(totalNptLossPcs) }} pcs · Hover problems</span>
+        <span class="kpi-hint"
+          >Est. Loss: {{ formatPcsValue(totalNptLossPcs) }} pcs · Hover problems</span
+        >
 
         <div class="npt-popover" role="tooltip">
           <div class="npt-popover-head">
@@ -2437,7 +3190,11 @@ onUnmounted(() => {
             <strong>{{ totalNptMinutes.toLocaleString() }} min</strong>
           </div>
           <div v-if="overallNptProblemsSummary.length" class="npt-popover-list">
-            <div v-for="prob in overallNptProblemsSummary" :key="prob.problem" class="npt-popover-row">
+            <div
+              v-for="prob in overallNptProblemsSummary"
+              :key="prob.problem"
+              class="npt-popover-row"
+            >
               <span class="npt-prob-name">{{ prob.problem }}</span>
               <span class="npt-prob-mins">{{ prob.minutes.toLocaleString() }} min</span>
             </div>
@@ -2456,18 +3213,23 @@ onUnmounted(() => {
           <span class="kpi-denom">pcs</span>
         </div>
         <span class="kpi-hint">
-          1st M/C: {{ totalFirstMachine.toLocaleString() }} · {{ totalGapMinutes.toLocaleString() }}m WIP
+          1st M/C: {{ totalFirstMachine.toLocaleString() }} · {{ totalGapMinutes.toLocaleString() }}m
+          WIP
         </span>
       </div>
 
       <div class="kpi-box">
         <span class="kpi-title">Line Efficiency</span>
-        <div class="kpi-metric" :class="Number(overallEfficiency) >= targetEfficiency ? 'tone-green' : 'tone-amber'">
+        <div
+          class="kpi-metric"
+          :class="Number(overallEfficiency) >= targetEfficiency ? 'tone-green' : 'tone-amber'"
+        >
           {{ overallEfficiency }}%
         </div>
         <span class="kpi-hint">
-          Var: {{ netVariance >= 0 ? `+${netVariance.toLocaleString()}` : netVariance.toLocaleString() }} · Target
-          {{ targetEfficiency }}%
+          Var:
+          {{ netVariance >= 0 ? `+${netVariance.toLocaleString()}` : netVariance.toLocaleString() }}
+          · Target {{ targetEfficiency }}%
         </span>
       </div>
 
@@ -2507,7 +3269,11 @@ onUnmounted(() => {
           <tbody>
             <template v-for="item in groupedTableDisplayRows" :key="item.key">
               <tr v-if="item.rowType === 'line'" :class="{ 'inactive-line-row': !item.line.isActive }">
-                <td v-if="item.showMergedUnitCell" :rowspan="item.unitRowspan" class="merged-unit-cell">
+                <td
+                  v-if="item.showMergedUnitCell"
+                  :rowspan="item.unitRowspan"
+                  class="merged-unit-cell"
+                >
                   <div class="merged-unit-sticky">
                     <span class="unit-badge unit-badge-sm">{{ item.line.unit }}</span>
                     <span class="merged-unit-sub">· {{ item.unitRowspan - 1 }}L</span>
@@ -2530,11 +3296,18 @@ onUnmounted(() => {
                   <div class="muted-sm">Total {{ item.line.operators + item.line.helpers }}</div>
                 </td>
                 <td>
-                  <div class="target-val">{{ item.line.effectiveDailyTarget.toLocaleString() }} pcs</div>
-                  <div class="muted-sm">Elapsed {{ item.line.elapsedTarget.toLocaleString() }}</div>
+                  <div class="target-val">
+                    {{ item.line.effectiveDailyTarget.toLocaleString() }} pcs
+                  </div>
+                  <div class="muted-sm">
+                    Elapsed {{ item.line.elapsedTarget.toLocaleString() }}
+                  </div>
                 </td>
                 <td class="npt-hover-wrap">
-                  <span class="gap-badge" :class="item.line.isNptAlert ? 'gap-npt-warn' : 'gap-npt'">
+                  <span
+                    class="gap-badge"
+                    :class="item.line.isNptAlert ? 'gap-npt-warn' : 'gap-npt'"
+                  >
                     {{ item.line.totalNptMin }}m ({{ formatPcsValue(item.line.nptLossPcs) }} pcs)
                   </span>
                   <div class="muted-sm">{{ item.line.nptPctStr }}% NPT</div>
@@ -2545,15 +3318,19 @@ onUnmounted(() => {
                       <strong>{{ item.line.totalNptMin }} min</strong>
                     </div>
                     <div v-if="item.line.nptProblemsSummary.length" class="npt-popover-list">
-                      <div v-for="prob in item.line.nptProblemsSummary" :key="prob.problem" class="npt-popover-row">
+                      <div
+                        v-for="prob in item.line.nptProblemsSummary"
+                        :key="prob.problem"
+                        class="npt-popover-row"
+                      >
                         <span class="npt-prob-name">{{ prob.problem }}</span>
                         <span class="npt-prob-mins">{{ prob.minutes }} min</span>
                       </div>
                     </div>
                     <div v-else class="npt-popover-empty">No NPT problems logged.</div>
                     <div class="npt-popover-foot">
-                      Est. Loss: <strong>{{ formatPcsValue(item.line.nptLossPcs) }} pcs</strong> · {{
-                        item.line.nptPctStr }}% NPT
+                      Est. Loss: <strong>{{ formatPcsValue(item.line.nptLossPcs) }} pcs</strong> ·
+                      {{ item.line.nptPctStr }}% NPT
                     </div>
                   </div>
                 </td>
@@ -2561,10 +3338,17 @@ onUnmounted(() => {
                 <td>
                   <div class="progress-meta">
                     <strong>{{ item.line.lastMachineTotal.toLocaleString() }}</strong>
-                    <span>/ {{ item.line.dailyTarget.toLocaleString() }} ({{ item.line.completionPct }}%)</span>
+                    <span
+                      >/ {{ item.line.dailyTarget.toLocaleString() }} ({{
+                        item.line.completionPct
+                      }}%)</span
+                    >
                   </div>
                   <div class="progress-track">
-                    <div class="progress-fill" :style="{ width: `${item.line.completionPct}%` }"></div>
+                    <div
+                      class="progress-fill"
+                      :style="{ width: `${item.line.completionPct}%` }"
+                    ></div>
                   </div>
                 </td>
                 <td>
@@ -2572,8 +3356,13 @@ onUnmounted(() => {
                   <div class="muted-sm">{{ item.line.qcPassRateStr }}% pass</div>
                 </td>
                 <td>
-                  <span class="gap-badge" :class="item.line.lastToQcVariance > 0 ? 'gap-qc-var' : 'gap-normal'">
-                    {{ item.line.lastToQcVariance.toLocaleString() }} pcs ({{ item.line.qcLossRateStr }}%)
+                  <span
+                    class="gap-badge"
+                    :class="item.line.lastToQcVariance > 0 ? 'gap-qc-var' : 'gap-normal'"
+                  >
+                    {{ item.line.lastToQcVariance.toLocaleString() }} pcs ({{
+                      item.line.qcLossRateStr
+                    }}%)
                   </span>
                 </td>
                 <td>
@@ -2583,17 +3372,29 @@ onUnmounted(() => {
                 </td>
                 <td class="num-col">{{ item.line.targetEfficiency }}%</td>
                 <td>
-                  <span class="eff-pill"
-                    :class="item.line.efficiency >= item.line.targetEfficiency ? 'eff-ok' : 'eff-warn'">
+                  <span
+                    class="eff-pill"
+                    :class="
+                      item.line.efficiency >= item.line.targetEfficiency ? 'eff-ok' : 'eff-warn'
+                    "
+                  >
                     {{ item.line.efficiencyStr }}%
                   </span>
                 </td>
                 <td>
                   <div class="row-actions">
-                    <button type="button" class="act-btn act-edit" @click="openLinePopup(item.line.id)">
+                    <button
+                      type="button"
+                      class="act-btn act-edit"
+                      @click="openLinePopup(item.line.id)"
+                    >
                       Edit
                     </button>
-                    <button type="button" class="act-btn act-inspect" @click="selectedLineId = item.line.id">
+                    <button
+                      type="button"
+                      class="act-btn act-inspect"
+                      @click="selectedLineId = item.line.id"
+                    >
                       Inspect
                     </button>
                   </div>
@@ -2610,7 +3411,9 @@ onUnmounted(() => {
                 </td>
                 <td class="num-col">Avg {{ item.subtotal.avgSmv }}m</td>
                 <td>
-                  <div class="num-col">{{ item.subtotal.operators }} Op / {{ item.subtotal.helpers }} Hlp</div>
+                  <div class="num-col">
+                    {{ item.subtotal.operators }} Op / {{ item.subtotal.helpers }} Hlp
+                  </div>
                   <div class="muted-sm">Total {{ item.subtotal.totalManpower }}</div>
                 </td>
                 <td>
@@ -2618,8 +3421,13 @@ onUnmounted(() => {
                   <div class="muted-sm">Line Target Sum</div>
                 </td>
                 <td class="npt-hover-wrap">
-                  <span class="gap-badge" :class="item.subtotal.isNptAlert ? 'gap-npt-warn' : 'gap-npt'">
-                    {{ item.subtotal.totalNptMin.toLocaleString() }}m ({{ formatPcsValue(item.subtotal.nptLossPcs) }}
+                  <span
+                    class="gap-badge"
+                    :class="item.subtotal.isNptAlert ? 'gap-npt-warn' : 'gap-npt'"
+                  >
+                    {{ item.subtotal.totalNptMin.toLocaleString() }}m ({{
+                      formatPcsValue(item.subtotal.nptLossPcs)
+                    }}
                     pcs)
                   </span>
                   <div class="muted-sm">Unit NPT Sum</div>
@@ -2630,52 +3438,86 @@ onUnmounted(() => {
                       <strong>{{ item.subtotal.totalNptMin.toLocaleString() }} min</strong>
                     </div>
                     <div v-if="item.subtotal.nptProblemsSummary.length" class="npt-popover-list">
-                      <div v-for="prob in item.subtotal.nptProblemsSummary" :key="prob.problem" class="npt-popover-row">
+                      <div
+                        v-for="prob in item.subtotal.nptProblemsSummary"
+                        :key="prob.problem"
+                        class="npt-popover-row"
+                      >
                         <span class="npt-prob-name">{{ prob.problem }}</span>
                         <span class="npt-prob-mins">{{ prob.minutes }} min</span>
                       </div>
                     </div>
                     <div v-else class="npt-popover-empty">No NPT problems logged.</div>
                     <div class="npt-popover-foot">
-                      Est. Loss: <strong>{{ formatPcsValue(item.subtotal.nptLossPcs) }} pcs</strong>
+                      Est. Loss:
+                      <strong>{{ formatPcsValue(item.subtotal.nptLossPcs) }} pcs</strong>
                     </div>
                   </div>
                 </td>
-                <td class="num-col">{{ item.subtotal.effectiveFirstMachine.toLocaleString() }}</td>
+                <td class="num-col">
+                  {{ item.subtotal.effectiveFirstMachine.toLocaleString() }}
+                </td>
                 <td>
                   <div class="progress-meta">
                     <strong>{{ item.subtotal.lastMachineTotal.toLocaleString() }}</strong>
-                    <span>/ {{ item.subtotal.dailyTarget.toLocaleString() }} ({{ item.subtotal.completionPct }}%)</span>
+                    <span
+                      >/ {{ item.subtotal.dailyTarget.toLocaleString() }} ({{
+                        item.subtotal.completionPct
+                      }}%)</span
+                    >
                   </div>
                   <div class="progress-track">
-                    <div class="progress-fill progress-fill-sub" :style="{ width: `${item.subtotal.completionPct}%` }">
-                    </div>
+                    <div
+                      class="progress-fill progress-fill-sub"
+                      :style="{ width: `${item.subtotal.completionPct}%` }"
+                    ></div>
                   </div>
                 </td>
                 <td>
-                  <div class="qc-pass-val">{{ item.subtotal.totalQcPass.toLocaleString() }} pcs</div>
+                  <div class="qc-pass-val">
+                    {{ item.subtotal.totalQcPass.toLocaleString() }} pcs
+                  </div>
                   <div class="muted-sm">{{ item.subtotal.qcPassRateStr }}% pass</div>
                 </td>
                 <td>
-                  <span class="gap-badge" :class="item.subtotal.lastToQcVariance > 0 ? 'gap-qc-var' : 'gap-normal'">
-                    {{ item.subtotal.lastToQcVariance.toLocaleString() }} pcs ({{ item.subtotal.qcLossRateStr }}%)
+                  <span
+                    class="gap-badge"
+                    :class="item.subtotal.lastToQcVariance > 0 ? 'gap-qc-var' : 'gap-normal'"
+                  >
+                    {{ item.subtotal.lastToQcVariance.toLocaleString() }} pcs ({{
+                      item.subtotal.qcLossRateStr
+                    }}%)
                   </span>
                 </td>
                 <td>
-                  <span class="gap-badge" :class="item.subtotal.isGapAlert ? 'gap-warn' : 'gap-normal'">
-                    {{ item.subtotal.machineGap.toLocaleString() }} pcs ({{ item.subtotal.gapMinutes.toLocaleString()
+                  <span
+                    class="gap-badge"
+                    :class="item.subtotal.isGapAlert ? 'gap-warn' : 'gap-normal'"
+                  >
+                    {{ item.subtotal.machineGap.toLocaleString() }} pcs ({{
+                      item.subtotal.gapMinutes.toLocaleString()
                     }}m)
                   </span>
                 </td>
                 <td class="num-col">Avg {{ item.subtotal.targetEfficiencyStr }}%</td>
                 <td>
-                  <span class="eff-pill"
-                    :class="item.subtotal.efficiency >= item.subtotal.targetEfficiency ? 'eff-ok' : 'eff-warn'">
+                  <span
+                    class="eff-pill"
+                    :class="
+                      item.subtotal.efficiency >= item.subtotal.targetEfficiency
+                        ? 'eff-ok'
+                        : 'eff-warn'
+                    "
+                  >
                     {{ item.subtotal.efficiencyStr }}%
                   </span>
                 </td>
                 <td>
-                  <button type="button" class="act-btn act-unit-filter" @click="selectUnit(item.subtotal.unit)">
+                  <button
+                    type="button"
+                    class="act-btn act-unit-filter"
+                    @click="selectUnit(item.subtotal.unit)"
+                  >
                     Filter {{ item.subtotal.unit }}
                   </button>
                 </td>
@@ -2689,13 +3531,18 @@ onUnmounted(() => {
                     ? `${UNIT_LINE_SHEET} is blank — no lines on board yet.`
                     : 'No lines match your current filter.'
                 }}
-                <button v-if="linesData.length > 0" type="button" class="act-btn act-inspect" style="margin-left: 8px"
+                <button
+                  v-if="linesData.length > 0"
+                  type="button"
+                  class="act-btn act-inspect"
+                  style="margin-left: 8px"
                   @click="
                     searchQuery = '';
-                  onlyGapAlerts = false;
-                  onlyActiveLines = false;
-                  selectedUnit = 'ALL';
-                  ">
+                    onlyGapAlerts = false;
+                    onlyActiveLines = false;
+                    selectedUnit = 'ALL';
+                  "
+                >
                   Clear Filters
                 </button>
               </td>
@@ -2725,7 +3572,10 @@ onUnmounted(() => {
         <div class="banner-stat npt-hover-wrap">
           <span class="banner-label">Line Wise NPT:</span>
           <strong class="banner-val tone-red">
-            {{ currentLineMetrics.totalNptMin }}m ({{ formatPcsValue(currentLineMetrics.nptLossPcs) }} pcs)
+            {{ currentLineMetrics.totalNptMin }}m ({{
+              formatPcsValue(currentLineMetrics.nptLossPcs)
+            }}
+            pcs)
           </strong>
 
           <div class="npt-popover" role="tooltip">
@@ -2734,7 +3584,11 @@ onUnmounted(() => {
               <strong>{{ currentLineMetrics.totalNptMin }} min</strong>
             </div>
             <div v-if="currentLineMetrics.nptProblemsSummary.length" class="npt-popover-list">
-              <div v-for="prob in currentLineMetrics.nptProblemsSummary" :key="prob.problem" class="npt-popover-row">
+              <div
+                v-for="prob in currentLineMetrics.nptProblemsSummary"
+                :key="prob.problem"
+                class="npt-popover-row"
+              >
                 <span class="npt-prob-name">{{ prob.problem }}</span>
                 <span class="npt-prob-mins">{{ prob.minutes }} min</span>
               </div>
@@ -2760,7 +3614,9 @@ onUnmounted(() => {
         <div class="banner-stat">
           <span class="banner-label">QC Pass:</span>
           <strong class="banner-val tone-green">
-            {{ currentLineMetrics.totalQcPass.toLocaleString() }} pcs ({{ currentLineMetrics.qcPassRateStr }}%)
+            {{ currentLineMetrics.totalQcPass.toLocaleString() }} pcs ({{
+              currentLineMetrics.qcPassRateStr
+            }}%)
           </strong>
         </div>
         <div class="banner-stat">
@@ -2770,10 +3626,18 @@ onUnmounted(() => {
           </strong>
         </div>
         <div class="row-actions">
-          <button type="button" class="act-btn act-edit" @click="openLinePopup(currentLine.id)">
+          <button
+            type="button"
+            class="act-btn act-edit"
+            @click="openLinePopup(currentLine.id)"
+          >
             Edit {{ currentLineMetrics.unit }}
           </button>
-          <button type="button" class="act-btn" @click="addFirstMachinePieces(currentLine.id, 10)">
+          <button
+            type="button"
+            class="act-btn"
+            @click="addFirstMachinePieces(currentLine.id, 10)"
+          >
             +10 1st M/C
           </button>
           <button type="button" class="act-btn act-inspect" @click="selectedLineId = 'ALL'">
@@ -2803,23 +3667,54 @@ onUnmounted(() => {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="row in computedRows" :key="row.hour" :class="{ 'active-hour-row': row.status === 'active' }">
-              <td><strong>{{ row.hour }}</strong></td>
+            <tr
+              v-for="row in computedRows"
+              :key="row.hour"
+              :class="{ 'active-hour-row': row.status === 'active' }"
+            >
+              <td>
+                <strong>{{ row.hour }}</strong>
+              </td>
               <td class="num-col">{{ row.target }}</td>
               <td>
-                <input v-model.number="currentLine.hourlyRows[row.index].actual" type="number" min="0"
-                  class="counter-input" @change="onHourlyActualChange(currentLine, row.index)" />
+                <input
+                  v-model.number="currentLine.hourlyRows[row.index].actual"
+                  type="number"
+                  inputmode="numeric"
+                  pattern="[0-9]*"
+                  min="0"
+                  class="counter-input"
+                  @change="onHourlyActualChange(currentLine, row.index)"
+                />
               </td>
               <td>
-                <input v-model.number="currentLine.hourlyRows[row.index].qcPass" type="number" min="0" :max="row.actual"
-                  class="counter-input counter-input-qc" @change="onHourlyQcPassChange(currentLine, row.index)" />
+                <input
+                  v-model.number="currentLine.hourlyRows[row.index].qcPass"
+                  type="number"
+                  inputmode="numeric"
+                  pattern="[0-9]*"
+                  min="0"
+                  :max="row.actual"
+                  class="counter-input counter-input-qc"
+                  @change="onHourlyQcPassChange(currentLine, row.index)"
+                />
               </td>
               <td>
-                <input v-model.number="currentLine.hourlyRows[row.index].downtimeMin" type="number" min="0"
-                  class="counter-input counter-input-npt" @change="onHourlyDowntimeChange(currentLine, row.index)" />
+                <input
+                  v-model.number="currentLine.hourlyRows[row.index].downtimeMin"
+                  type="number"
+                  inputmode="numeric"
+                  pattern="[0-9]*"
+                  min="0"
+                  class="counter-input counter-input-npt"
+                  @change="onHourlyDowntimeChange(currentLine, row.index)"
+                />
               </td>
               <td>
-                <span class="gap-badge" :class="row.hourLastToQcVariance > 0 ? 'gap-qc-var' : 'gap-normal'">
+                <span
+                  class="gap-badge"
+                  :class="row.hourLastToQcVariance > 0 ? 'gap-qc-var' : 'gap-normal'"
+                >
                   {{ row.hourLastToQcVariance }} pcs
                 </span>
               </td>
@@ -2832,7 +3727,10 @@ onUnmounted(() => {
               <td class="num-col">{{ row.cumulativeActual }}</td>
               <td class="num-col tone-green">{{ row.cumulativeQcPass }}</td>
               <td>
-                <span class="eff-pill" :class="row.efficiency >= currentLine.targetEfficiency ? 'eff-ok' : 'eff-warn'">
+                <span
+                  class="eff-pill"
+                  :class="row.efficiency >= currentLine.targetEfficiency ? 'eff-ok' : 'eff-warn'"
+                >
                   {{ row.efficiency }}%
                 </span>
               </td>
@@ -2844,9 +3742,27 @@ onUnmounted(() => {
               </td>
               <td>
                 <div class="row-actions">
-                  <button type="button" class="act-btn" @click="addPieces(currentLine.id, row.index, 5)">+5</button>
-                  <button type="button" class="act-btn" @click="addPieces(currentLine.id, row.index, 10)">+10</button>
-                  <button type="button" class="act-btn" @click="addPieces(currentLine.id, row.index, -5)">-5</button>
+                  <button
+                    type="button"
+                    class="act-btn"
+                    @click="addPieces(currentLine.id, row.index, 5)"
+                  >
+                    +5
+                  </button>
+                  <button
+                    type="button"
+                    class="act-btn"
+                    @click="addPieces(currentLine.id, row.index, 10)"
+                  >
+                    +10
+                  </button>
+                  <button
+                    type="button"
+                    class="act-btn"
+                    @click="addPieces(currentLine.id, row.index, -5)"
+                  >
+                    -5
+                  </button>
                 </div>
               </td>
             </tr>
@@ -2901,7 +3817,7 @@ onUnmounted(() => {
   flex: 1 1 320px;
 }
 
-.board-shell.mode-compact .top-selector-group>* {
+.board-shell.mode-compact .top-selector-group > * {
   flex: 1 1 auto;
 }
 
@@ -2911,7 +3827,7 @@ onUnmounted(() => {
   border: 1px solid rgba(148, 163, 184, 0.24);
   border-radius: 9px;
   padding: 7px 12px;
-  font-size: clamp(0.76rem, 0.9vw, 0.84rem);
+  font-size: clamp(0.82rem, 0.9vw, 0.86rem);
   min-width: 160px;
   flex: 1 1 180px;
 }
@@ -2952,23 +3868,26 @@ onUnmounted(() => {
   position: fixed;
   inset: 0;
   z-index: 10000;
-  background: rgba(2, 6, 23, 0.76);
+  background: rgba(2, 6, 23, 0.78);
   backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
   padding: clamp(8px, 2vw, 20px);
+  overscroll-behavior: contain;
 }
 
 .modal-card {
   width: 100%;
   max-width: min(560px, 96vw);
-  max-height: 90dvh;
+  max-height: 92dvh;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   background: #131e35;
   border: 1px solid rgba(148, 163, 184, 0.26);
   border-radius: 16px;
-  padding: clamp(14px, 2vw, 22px);
+  padding: clamp(12px, 2vw, 22px);
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65);
   color: #f8fafc;
   box-sizing: border-box;
@@ -2981,22 +3900,34 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
+.shift-modal-card {
+  max-width: min(760px, 96vw);
+}
+
 .qr-modal-card {
   max-width: min(620px, 96vw);
 }
 
-.board-shell.mode-compact .modal-card {
-  align-self: flex-end;
-  max-height: 88dvh;
-  border-radius: 16px 16px 10px 10px;
+@media (max-width: 640px) {
+  .modal-backdrop {
+    align-items: flex-end;
+    padding: 6px;
+  }
+
+  .modal-card {
+    max-width: 100%;
+    max-height: 92dvh;
+    border-radius: 16px 16px 12px 12px;
+    padding: 12px;
+  }
 }
 
 .modal-head {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: center;
   gap: 12px;
-  padding-bottom: 12px;
+  padding-bottom: 10px;
   border-bottom: 1px solid rgba(148, 163, 184, 0.14);
 }
 
@@ -3005,11 +3936,17 @@ onUnmounted(() => {
   background: rgba(168, 85, 247, 0.18);
   color: #d8b4fe;
   border: 1px solid rgba(168, 85, 247, 0.35);
-  padding: 2px 9px;
+  padding: 3px 10px;
   border-radius: 999px;
-  font-size: 0.68rem;
+  font-size: 0.7rem;
   font-weight: 700;
   letter-spacing: 0.05em;
+}
+
+.shift-modal-badge {
+  background: rgba(56, 189, 248, 0.18);
+  color: #7dd3fc;
+  border-color: rgba(56, 189, 248, 0.38);
 }
 
 .qr-modal-badge {
@@ -3018,21 +3955,15 @@ onUnmounted(() => {
   border-color: rgba(16, 185, 129, 0.38);
 }
 
-.modal-title {
-  margin: 6px 0 0;
-  font-size: clamp(0.95rem, 1.3vw, 1.1rem);
-  font-weight: 700;
-}
-
 .modal-close-btn {
   background: #1e293b;
   color: #cbd5e1;
   border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: 8px;
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   flex-shrink: 0;
-  font-size: 0.85rem;
+  font-size: 0.9rem;
   cursor: pointer;
 }
 
@@ -3045,7 +3976,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  margin-top: 14px;
+  margin-top: 12px;
 }
 
 .unit-popup-card .modal-form {
@@ -3053,12 +3984,90 @@ onUnmounted(() => {
   min-height: 0;
 }
 
+.shift-preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.preset-chip-active {
+  background: rgba(56, 189, 248, 0.24) !important;
+  color: #bae6fd !important;
+  border-color: rgba(56, 189, 248, 0.55) !important;
+}
+
+.shift-time-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+@media (max-width: 640px) {
+  .shift-time-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.shift-options-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 10px;
+  padding: 9px 12px;
+}
+
+.shift-slots-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.shift-slots-table-wrap {
+  max-height: 32dvh;
+  overflow: auto;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  border-radius: 6px;
+  background: #070d18;
+}
+
+.shift-slots-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.shift-slots-table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 6px 8px;
+  background: #1b2842;
+  color: #e2e8f0;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  text-align: left;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.shift-preview-cell {
+  padding: 0 8px !important;
+  color: #93c5fd;
+  font-weight: 600;
+  text-align: right;
+}
+
 .popup-unit-head-bar {
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   padding: 10px 12px;
   border-radius: 10px;
   background: rgba(15, 23, 42, 0.85);
@@ -3109,7 +4118,7 @@ onUnmounted(() => {
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
   background: rgba(15, 23, 42, 0.85);
   border: 1px solid rgba(148, 163, 184, 0.16);
   border-radius: 10px;
@@ -3129,8 +4138,8 @@ onUnmounted(() => {
 }
 
 .qr-step-block {
-  margin-top: 12px;
-  padding: 12px 14px;
+  margin-top: 10px;
+  padding: 12px;
   border-radius: 12px;
   background: rgba(15, 23, 42, 0.78);
   border: 1px solid rgba(148, 163, 184, 0.18);
@@ -3147,12 +4156,17 @@ onUnmounted(() => {
 .qr-single-field-row {
   display: flex;
   align-items: flex-end;
-  gap: 12px;
+  gap: 10px;
 }
 
 .qr-single-field {
   flex: 1 1 auto;
-  max-width: 320px;
+  min-width: 0;
+}
+
+.qr-action-btn {
+  min-height: 38px;
+  flex-shrink: 0;
 }
 
 .qr-step-header {
@@ -3189,19 +4203,53 @@ onUnmounted(() => {
 .qr-scan-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
   align-items: center;
 }
 
 .qr-option-dropdown,
 .qr-scan-row .form-input {
-  flex: 1 1 200px;
+  flex: 1 1 190px;
+  min-width: 0;
+}
+
+.qr-scan-btn-group {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+@media (max-width: 640px) {
+  .qr-single-field-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .qr-single-field {
+    max-width: 100%;
+  }
+
+  .qr-action-btn,
+  .qr-scan-btn-group .btn {
+    min-height: 42px;
+    flex: 1 1 auto;
+  }
+
+  .qr-scan-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .qr-scan-btn-group {
+    width: 100%;
+  }
 }
 
 .qr-camera-box {
   width: 100%;
   max-width: 360px;
-  margin: 4px auto 0;
+  max-height: 260px;
+  margin: 2px auto 0;
   border-radius: 10px;
   overflow: hidden;
   border: 1px solid rgba(56, 189, 248, 0.35);
@@ -3226,8 +4274,9 @@ onUnmounted(() => {
   color: #e2e8f0;
   border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: 999px;
-  padding: 4px 10px;
-  font-size: 0.73rem;
+  padding: 5px 12px;
+  min-height: 30px;
+  font-size: 0.75rem;
   font-weight: 600;
   cursor: pointer;
 }
@@ -3237,17 +4286,18 @@ onUnmounted(() => {
 }
 
 .qr-feedback-bar {
-  margin-top: 10px;
+  margin-top: 8px;
   padding: 8px 12px;
   border-radius: 9px;
   background: rgba(30, 41, 59, 0.9);
   border-left: 3px solid #38bdf8;
   font-size: 0.78rem;
   color: #e2e8f0;
+  word-break: break-word;
 }
 
 .qr-modal-history {
-  margin-top: 12px;
+  margin-top: 10px;
   padding-top: 10px;
   border-top: 1px solid rgba(148, 163, 184, 0.14);
   display: flex;
@@ -3267,29 +4317,38 @@ onUnmounted(() => {
   color: #94a3b8;
   border: 1px solid rgba(148, 163, 184, 0.15);
   border-radius: 999px;
-  padding: 2px 9px;
+  padding: 3px 9px;
   font-size: 0.71rem;
 }
 
 .field-group {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  font-size: 0.72rem;
+  gap: 5px;
+  font-size: 0.76rem;
   font-weight: 600;
-  color: #94a3b8;
+  color: #cbd5e1;
 }
 
 .form-input,
 .form-select {
   width: 100%;
+  min-height: 38px;
   background: #09101d;
   color: #f8fafc;
   border: 1px solid rgba(148, 163, 184, 0.26);
-  border-radius: 7px;
-  padding: 7px 9px;
-  font-size: clamp(0.78rem, 0.9vw, 0.85rem);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 0.88rem;
   box-sizing: border-box;
+}
+
+@media (max-width: 640px) {
+  .form-input,
+  .form-select {
+    min-height: 42px;
+    font-size: 16px;
+  }
 }
 
 .board-header {
@@ -3358,7 +4417,7 @@ onUnmounted(() => {
   background: rgba(56, 189, 248, 0.14);
   color: #7dd3fc;
   border: 1px solid rgba(56, 189, 248, 0.28);
-  padding: 4px 10px;
+  padding: 5px 10px;
   border-radius: 999px;
   font-size: 0.72rem;
   font-weight: 700;
@@ -3388,6 +4447,13 @@ onUnmounted(() => {
   font-size: clamp(0.69rem, 0.8vw, 0.76rem);
   font-weight: 500;
   max-width: 100%;
+}
+
+.chip-shift {
+  background: rgba(14, 165, 233, 0.16);
+  color: #7dd3fc;
+  border-color: rgba(56, 189, 248, 0.35);
+  font-weight: 600;
 }
 
 .chip-qc {
@@ -3445,16 +4511,17 @@ onUnmounted(() => {
   width: 100%;
 }
 
-.board-shell.mode-compact .header-actions>.btn,
-.board-shell.mode-compact .filter-controls>.filter-toggle {
+.board-shell.mode-compact .header-actions > .btn,
+.board-shell.mode-compact .filter-controls > .filter-toggle {
   flex: 1 1 calc(50% - 4px);
+  min-height: 40px;
   text-align: center;
 }
 
 .btn {
   border-radius: 10px;
-  padding: clamp(6px, 0.7vw, 8px) clamp(10px, 1vw, 14px);
-  font-size: clamp(0.74rem, 0.85vw, 0.82rem);
+  padding: clamp(7px, 0.75vw, 9px) clamp(11px, 1vw, 14px);
+  font-size: clamp(0.76rem, 0.85vw, 0.83rem);
   font-weight: 600;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -3462,13 +4529,23 @@ onUnmounted(() => {
 }
 
 .btn:disabled {
-  opacity: 0.6;
+  opacity: 0.55;
   cursor: not-allowed;
 }
 
 .btn-sm {
   padding: 6px 12px;
-  font-size: 0.78rem;
+  font-size: 0.8rem;
+}
+
+.btn-shift {
+  background: rgba(14, 165, 233, 0.18);
+  color: #bae6fd;
+  border: 1px solid rgba(56, 189, 248, 0.42);
+}
+
+.btn-shift:hover {
+  background: rgba(14, 165, 233, 0.28);
 }
 
 .btn-popup {
@@ -3541,7 +4618,8 @@ onUnmounted(() => {
   border: 1px solid rgba(148, 163, 184, 0.24);
   border-radius: 9px;
   padding: 7px 12px;
-  font-size: clamp(0.76rem, 0.85vw, 0.84rem);
+  min-height: 36px;
+  font-size: clamp(0.78rem, 0.85vw, 0.84rem);
   font-weight: 600;
   min-width: clamp(120px, 14vw, 165px);
 }
@@ -3552,7 +4630,8 @@ onUnmounted(() => {
   border: 1px solid rgba(148, 163, 184, 0.24);
   border-radius: 9px;
   padding: 7px 12px;
-  font-size: clamp(0.76rem, 0.85vw, 0.84rem);
+  min-height: 36px;
+  font-size: clamp(0.78rem, 0.85vw, 0.84rem);
   font-weight: 600;
   min-width: clamp(160px, 20vw, 240px);
 }
@@ -3574,7 +4653,7 @@ onUnmounted(() => {
   border: 1px solid rgba(148, 163, 184, 0.2);
   border-radius: 9px;
   padding: 7px 12px;
-  font-size: clamp(0.74rem, 0.85vw, 0.82rem);
+  font-size: clamp(0.76rem, 0.85vw, 0.82rem);
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
@@ -3812,6 +4891,7 @@ onUnmounted(() => {
   overflow-x: auto;
   overflow-y: visible;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
   border-radius: 0 0 14px 14px;
 }
 
@@ -3934,19 +5014,23 @@ onUnmounted(() => {
 }
 
 .unit-subtotal-row {
-  background: linear-gradient(90deg,
-      rgba(37, 99, 235, 0.18) 0%,
-      rgba(30, 41, 59, 0.92) 45%,
-      rgba(23, 34, 56, 0.95) 100%);
+  background: linear-gradient(
+    90deg,
+    rgba(37, 99, 235, 0.18) 0%,
+    rgba(30, 41, 59, 0.92) 45%,
+    rgba(23, 34, 56, 0.95) 100%
+  );
   border-top: 1px solid rgba(96, 165, 250, 0.32);
   border-bottom: 2px solid rgba(148, 163, 184, 0.24);
 }
 
 .unit-subtotal-row:hover {
-  background: linear-gradient(90deg,
-      rgba(37, 99, 235, 0.24) 0%,
-      rgba(30, 41, 59, 0.96) 45%,
-      rgba(23, 34, 56, 0.98) 100%);
+  background: linear-gradient(
+    90deg,
+    rgba(37, 99, 235, 0.24) 0%,
+    rgba(30, 41, 59, 0.96) 45%,
+    rgba(23, 34, 56, 0.98) 100%
+  );
 }
 
 .subtotal-label {
@@ -4131,6 +5215,7 @@ onUnmounted(() => {
 
 .counter-input {
   width: 78px;
+  min-height: 32px;
   background: #0b1220;
   color: #f8fafc;
   border: 1px solid rgba(148, 163, 184, 0.28);
@@ -4162,8 +5247,9 @@ onUnmounted(() => {
   color: #e2e8f0;
   border: 1px solid rgba(148, 163, 184, 0.2);
   border-radius: 7px;
-  padding: 5px 8px;
-  font-size: 0.72rem;
+  padding: 6px 9px;
+  min-height: 30px;
+  font-size: 0.73rem;
   font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
@@ -4247,6 +5333,8 @@ onUnmounted(() => {
   min-height: 190px;
   max-height: 46dvh;
   overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   margin: 0;
   padding: 0;
   border: 1px solid rgba(148, 163, 184, 0.42);
@@ -4335,14 +5423,14 @@ onUnmounted(() => {
 .xl-select {
   display: block;
   width: 100%;
-  height: 28px;
+  height: 32px;
   margin: 0 !important;
   padding: 0 6px !important;
   border: none !important;
   border-radius: 0 !important;
   background: transparent;
   color: #f8fafc;
-  font-size: 0.76rem;
+  font-size: 0.78rem;
   font-family: inherit;
   box-sizing: border-box;
   outline: none;
@@ -4376,7 +5464,6 @@ onUnmounted(() => {
   font-weight: 600;
 }
 
-/* Chrome, Edge, Safari, Opera */
 .xl-input[type='number']::-webkit-outer-spin-button,
 .xl-input[type='number']::-webkit-inner-spin-button,
 .counter-input[type='number']::-webkit-outer-spin-button,
@@ -4385,7 +5472,6 @@ onUnmounted(() => {
   margin: 0;
 }
 
-/* Firefox */
 .xl-input[type='number'],
 .counter-input[type='number'] {
   -moz-appearance: textfield;
