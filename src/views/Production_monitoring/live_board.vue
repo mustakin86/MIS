@@ -9,12 +9,12 @@ const BACKEND_URL =
 
 const UNIT_LINE_SHEET = 'Unit_line_No'
 const SHIFT_STORAGE_KEY = 'mis_live_board_shift_config_v3'
+const SHIFT_RULES_STORAGE_KEY = 'mis_live_board_shift_rules_v1'
 const LINES_PER_UNIT = 8
 const NPT_ALERT_THRESHOLD_MIN = 30
 const DEFAULT_FALLBACK_UNITS = ['Unit-1', 'Unit-2', 'Unit-3', 'Unit-4']
-
 const DEFAULT_SHIFT_HOURS = 8
-const FIRST_SLOT_OFFSET_MINUTES = 80 // 1 hour 20 minutes = 80 minutes
+const FIRST_SLOT_OFFSET_MINUTES = 80
 
 const NPT_PROBLEM_TYPES = [
   'MACHINE PROBLEM',
@@ -26,9 +26,16 @@ const NPT_PROBLEM_TYPES = [
 ]
 
 const SHIFT_PRESETS = [
-  { key: 'DAY', label: 'Shift A (Day)', startTime: '08:00', durationHours: 8 },
-  { key: 'EVENING', label: 'Shift B (Evening)', startTime: '16:00', durationHours: 8 },
-  { key: 'NIGHT', label: 'Shift C (Night)', startTime: '00:00', durationHours: 8 }
+  { key: 'DAY', label: 'Shift A (Day)' },
+  { key: 'EVENING', label: 'Shift B (Evening)' },
+  { key: 'NIGHT', label: 'Shift C (Night)' }
+]
+
+const SHIFT_SECTION_OPTIONS = [
+  'KNITTING',
+  'DYEING',
+  'GARMENTS',
+  
 ]
 
 const DEFAULT_SLOT_TEMPLATES = [
@@ -42,26 +49,47 @@ const DEFAULT_SLOT_TEMPLATES = [
   { ratio: 0.125, dhu: 0.0, downtimeMin: 0, problem: null }
 ]
 
+function toDateKey(rawDate = new Date()) {
+  if (rawDate instanceof Date && !Number.isNaN(rawDate.getTime())) {
+    const y = rawDate.getFullYear()
+    const m = String(rawDate.getMonth() + 1).padStart(2, '0')
+    const d = String(rawDate.getDate()).padStart(2, '0')
+    return `${y}-${m}-${d}`
+  }
+  const str = String(rawDate || '').trim()
+  const isoMatch = str.match(/^(\d{4}-\d{2}-\d{2})/)
+  if (isoMatch) return isoMatch[1]
+  const parsed = new Date(str)
+  if (!Number.isNaN(parsed.getTime())) {
+    return toDateKey(parsed)
+  }
+  return toDateKey(new Date())
+}
+
+function normKey(val = '') {
+  return String(val || '').trim().toUpperCase()
+}
+
 function parseFlexibleTimeToMinutes(rawStr, fallbackMinutes = 8 * 60) {
-  const clean = String(rawStr || '').trim().toUpperCase()
-  if (!clean) return null
+  const clean = String(rawStr ?? '').trim().toUpperCase()
+  if (!clean) return fallbackMinutes
 
   const ampmMatch = clean.match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)$/)
   if (ampmMatch) {
     let hh = Number(ampmMatch[1])
     const mm = Number(ampmMatch[2] || 0)
     const period = ampmMatch[3]
-    if (hh < 1 || hh > 12 || mm < 0 || mm > 59) return null
+    if (hh < 1 || hh > 12 || mm < 0 || mm > 59) return fallbackMinutes
     if (period === 'PM' && hh !== 12) hh += 12
     if (period === 'AM' && hh === 12) hh = 0
     return hh * 60 + mm
   }
 
-  const h24Match = clean.match(/^(\d{1,2}):(\d{2})$/)
+  const h24Match = clean.match(/^(\d{1,2})(?::(\d{2}))?$/)
   if (h24Match) {
     const hh = Number(h24Match[1])
-    const mm = Number(h24Match[2])
-    if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null
+    const mm = Number(h24Match[2] || 0)
+    if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return fallbackMinutes
     return hh * 60 + mm
   }
 
@@ -69,10 +97,24 @@ function parseFlexibleTimeToMinutes(rawStr, fallbackMinutes = 8 * 60) {
 }
 
 function formatMinutesToHHMM(totalMins) {
-  const wrapped = (((Math.round(totalMins) % 1440) + 1440) % 1440)
+  const wrapped = (((Math.round(Number(totalMins) || 0) % 1440) + 1440) % 1440)
   const hh = String(Math.floor(wrapped / 60)).padStart(2, '0')
   const mm = String(wrapped % 60).padStart(2, '0')
   return `${hh}:${mm}`
+}
+
+function addMinutesToTime(startTime = '08:00', minutesToAdd = 60, fallbackStart = '08:00') {
+  const fallbackMin = parseFlexibleTimeToMinutes(fallbackStart, 8 * 60)
+  const baseMin = parseFlexibleTimeToMinutes(startTime, fallbackMin)
+  return formatMinutesToHHMM(baseMin + Number(minutesToAdd || 0))
+}
+
+function calcHourEndTime(hourStartTime = '08:00', stepMinutes = 60) {
+  return addMinutesToTime(hourStartTime, stepMinutes)
+}
+
+function calcNextHourFromEndTime(endTime = '09:00', stepMinutes = 60) {
+  return addMinutesToTime(endTime, stepMinutes)
 }
 
 function getConfiguredDurationHours(fallbackHours = DEFAULT_SHIFT_HOURS) {
@@ -92,20 +134,42 @@ function buildShiftSlotsFromStartPlus80Min(
   shiftName = 'Shift A (Day)',
   baseId = 'SHF-1',
   createdAtIso = new Date().toISOString(),
-  customSlots = null
+  customSlots = null,
+  shiftStartTimeCol = null,
+  submissionDateVal = toDateKey(new Date())
 ) {
+  const cleanShiftStart = formatMinutesToHHMM(
+    parseFlexibleTimeToMinutes(shiftStartTimeCol || startTime, 8 * 60)
+  )
+  const dateKey = toDateKey(submissionDateVal)
+
   if (Array.isArray(customSlots) && customSlots.length > 0) {
     return customSlots.map((slot, idx) => {
-      const sectionLabel = String(slot.section || slot.hour || '').trim()
+      const rawSection = String(slot.section || slot.hour || '').trim()
+      const parts = rawSection.split('-').map((p) => p.trim())
+      const slotStart =
+        idx === 0
+          ? formatMinutesToHHMM(parseFlexibleTimeToMinutes(startTime, 8 * 60))
+          : formatMinutesToHHMM(parseFlexibleTimeToMinutes(parts[0] || startTime, 8 * 60))
+      const slotEnd =
+        parts[1] && !Number.isNaN(Date.parse(`1970-01-01 ${parts[1]}`))
+          ? formatMinutesToHHMM(parseFlexibleTimeToMinutes(parts[1], 9 * 60))
+          : calcHourEndTime(slotStart, 60)
+      const nextHour = calcNextHourFromEndTime(slotEnd, 60)
+      const sectionLabel = rawSection || `${slotStart} - ${slotEnd}`
+      const rawStartLabel = String(slot.Shift_Start_time || cleanShiftStart).trim()
+
       return {
         id: String(slot.id || `${baseId}-${idx + 1}`),
         section: sectionLabel,
         hour: sectionLabel,
+        hourStartTime: slotStart,
+        endTime: slotEnd,
+        nextHour,
         Shift: String(slot.Shift || shiftName || 'Shift A (Day)'),
-        Shift_Start_time:
-          idx === 0
-            ? String(startTime || '08:00')
-            : sectionLabel.split('-')[0]?.trim() || String(startTime || '08:00'),
+        Shift_Start_time: rawStartLabel,
+        submissionDate: toDateKey(slot.submissionDate || slot.date || dateKey),
+        date: toDateKey(slot.date || slot.submissionDate || dateKey),
         create_at: String(slot.create_at || createdAtIso),
         ratio: Number(slot.ratio) || 1 / customSlots.length,
         dhu: Number(slot.dhu) || 0,
@@ -124,13 +188,15 @@ function buildShiftSlotsFromStartPlus80Min(
   let idx = 0
 
   while (cursor < endMin && slots.length < 24) {
-    // Slot 0 adds 1h 20m (80 minutes); remaining slots step by 60 minutes
     const stepMins =
       idx === 0
         ? Math.min(FIRST_SLOT_OFFSET_MINUTES, endMin - cursor)
         : Math.min(60, endMin - cursor)
     const nextCursor = cursor + stepMins
-    const sectionLabel = `${formatMinutesToHHMM(cursor)} - ${formatMinutesToHHMM(nextCursor)}`
+    const slotStart = formatMinutesToHHMM(cursor)
+    const slotEnd = formatMinutesToHHMM(nextCursor)
+    const nextHour = calcNextHourFromEndTime(slotEnd, 60)
+    const sectionLabel = `${slotStart} - ${slotEnd}`
     const template = DEFAULT_SLOT_TEMPLATES[idx % DEFAULT_SLOT_TEMPLATES.length]
     const ratio = Number((stepMins / totalShiftMins).toFixed(4))
 
@@ -138,8 +204,13 @@ function buildShiftSlotsFromStartPlus80Min(
       id: `${baseId}-${idx + 1}`,
       section: sectionLabel,
       hour: sectionLabel,
+      hourStartTime: slotStart,
+      endTime: slotEnd,
+      nextHour,
       Shift: shiftName,
-      Shift_Start_time: formatMinutesToHHMM(cursor),
+      Shift_Start_time: cleanShiftStart,
+      submissionDate: dateKey,
+      date: dateKey,
       create_at: createdAtIso,
       ratio: ratio > 0 ? ratio : 0.1,
       dhu: template.dhu,
@@ -169,8 +240,7 @@ function buildShiftSlotsFromStartPlus80Min(
 }
 
 /**
- * Maps a QR scan timestamp (Date) to the active shift slot index.
- * Any scan within [Shift_Start_time, Shift_Start_time + 80m) maps to slot 0 (first 1h 20m window).
+ * Maps a scan/submission timestamp (Date) to the active shift slot index.
  */
 function findSlotIndexForScanTime(
   scanDate = new Date(),
@@ -200,7 +270,11 @@ const initialShift = 'Shift A (Day)'
 const initialStart = '08:00'
 const initialHours = DEFAULT_SHIFT_HOURS
 const initialEnd = calcEndTimeFromStart(initialStart, initialHours)
+const initialDate = toDateKey(new Date())
 const initialCreatedAt = new Date().toISOString()
+
+const submissionDate = ref(initialDate)
+const shiftRules = ref([])
 
 const shiftConfig = ref({
   id: initialId,
@@ -210,6 +284,8 @@ const shiftConfig = ref({
   startTime: initialStart,
   endTime: initialEnd,
   durationHours: initialHours,
+  submissionDate: initialDate,
+  date: initialDate,
   create_at: initialCreatedAt,
   autoAlignActiveHour: false,
   recalcHourlyTargets: true,
@@ -219,7 +295,9 @@ const shiftConfig = ref({
     initialShift,
     initialId,
     initialCreatedAt,
-    null
+    null,
+    initialStart,
+    initialDate
   )
 })
 
@@ -234,30 +312,112 @@ const shiftDraft = ref({
   startTime: initialStart,
   endTime: initialEnd,
   durationHours: initialHours,
+  submissionDate: initialDate,
+  date: initialDate,
   create_at: initialCreatedAt,
   autoAlignActiveHour: false,
   recalcHourlyTargets: true,
   slots: []
 })
 
-const shiftDurationHours = computed(() =>
-  getConfiguredDurationHours(shiftDraft.value.durationHours)
-)
+function buildRuleSignature(rule) {
+  const dKey = toDateKey(rule.submissionDate || rule.date || submissionDate.value)
+  const secKey = normKey(rule.section)
+  const shfKey = normKey(rule.Shift || rule.shiftName)
+  const minVal = parseFlexibleTimeToMinutes(rule.Shift_Start_time || rule.startTime, 8 * 60)
+  return `${dKey}|${secKey}|${shfKey}|${minVal}`
+}
 
-const shiftDurationMinutes = computed(() =>
-  Math.round(shiftDurationHours.value * 60)
-)
+function resolveMatchingShiftRule({
+  date = submissionDate.value,
+  section = '',
+  shift = shiftConfig.value.Shift,
+  startTime = null
+} = {}) {
+  const dKey = toDateKey(date)
+  const secKey = normKey(section)
+  const shfKey = normKey(shift)
+  const hasExplicitStart =
+    startTime !== null && startTime !== undefined && String(startTime).trim() !== ''
+  const targetStartMin = hasExplicitStart
+    ? parseFlexibleTimeToMinutes(startTime, 8 * 60)
+    : null
 
-const shiftSlotRatioSum = computed(() =>
-  Number(
-    (shiftDraft.value.slots || [])
-      .reduce((sum, s) => sum + (Number(s.ratio) || 0), 0)
-      .toFixed(4)
+  const rules = Array.isArray(shiftRules.value) ? shiftRules.value : []
+  if (!rules.length) return null
+
+  // 1. Exact Date + Section + Shift + Shift_Start_time
+  if (targetStartMin !== null) {
+    const exact = rules.find(
+      (r) =>
+        toDateKey(r.submissionDate || r.date) === dKey &&
+        normKey(r.section) === secKey &&
+        normKey(r.Shift || r.shiftName) === shfKey &&
+        parseFlexibleTimeToMinutes(r.Shift_Start_time || r.startTime, 8 * 60) === targetStartMin
+    )
+    if (exact) return exact
+  }
+
+  // 2. Same Date + Section + Shift
+  const sameDateSecShift = rules.find(
+    (r) =>
+      toDateKey(r.submissionDate || r.date) === dKey &&
+      secKey &&
+      normKey(r.section) === secKey &&
+      (!shfKey || normKey(r.Shift || r.shiftName) === shfKey)
   )
-)
+  if (sameDateSecShift) return sameDateSecShift
+
+  // 3. Same Date + Section
+  const sameDateSec = rules.find(
+    (r) =>
+      toDateKey(r.submissionDate || r.date) === dKey &&
+      secKey &&
+      normKey(r.section) === secKey
+  )
+  if (sameDateSec) return sameDateSec
+
+  // 4. Latest rule matching Section + Shift across dates
+  const bySecShift = [...rules]
+    .filter(
+      (r) =>
+        secKey &&
+        normKey(r.section) === secKey &&
+        (!shfKey || normKey(r.Shift || r.shiftName) === shfKey)
+    )
+    .sort((a, b) =>
+      toDateKey(b.submissionDate || b.date).localeCompare(toDateKey(a.submissionDate || a.date))
+    )
+  if (bySecShift.length) return bySecShift[0]
+
+  // 5. Same Date + Shift
+  const sameDateShift = rules.find(
+    (r) =>
+      toDateKey(r.submissionDate || r.date) === dKey &&
+      shfKey &&
+      normKey(r.Shift || r.shiftName) === shfKey
+  )
+  if (sameDateShift) return sameDateShift
+
+  // 6. Same Date
+  const sameDate = rules.find((r) => toDateKey(r.submissionDate || r.date) === dKey)
+  return sameDate || rules[0]
+}
 
 function loadSavedShiftConfig() {
   if (typeof window === 'undefined') return
+  try {
+    const rawRules = window.localStorage.getItem(SHIFT_RULES_STORAGE_KEY)
+    if (rawRules) {
+      const parsedRules = JSON.parse(rawRules)
+      if (Array.isArray(parsedRules)) {
+        shiftRules.value = parsedRules
+      }
+    }
+  } catch (_) {
+    // Ignore invalid rules storage
+  }
+
   try {
     const raw = window.localStorage.getItem(SHIFT_STORAGE_KEY)
     if (!raw) return
@@ -270,16 +430,21 @@ function loadSavedShiftConfig() {
       const computedEnd = calcEndTimeFromStart(cleanStart, savedHours)
       const cleanShift = String(parsed.Shift || parsed.shiftName || 'Shift A (Day)').trim()
       const cleanId = String(parsed.id || 'SHF-001').trim()
+      const dateKey = toDateKey(parsed.submissionDate || parsed.date || new Date())
       const createdAtIso = String(parsed.create_at || new Date().toISOString())
+
+      submissionDate.value = dateKey
 
       shiftConfig.value = {
         id: cleanId,
         Shift: cleanShift,
         shiftName: cleanShift,
-        Shift_Start_time: cleanStart,
-        startTime: cleanStart,
+        Shift_Start_time: String(rawStart).trim() || cleanStart,
+        startTime: String(rawStart).trim() || cleanStart,
         endTime: computedEnd,
         durationHours: savedHours,
+        submissionDate: dateKey,
+        date: dateKey,
         create_at: createdAtIso,
         autoAlignActiveHour: Boolean(parsed.autoAlignActiveHour),
         recalcHourlyTargets: parsed.recalcHourlyTargets !== false,
@@ -289,7 +454,9 @@ function loadSavedShiftConfig() {
           cleanShift,
           cleanId,
           createdAtIso,
-          Array.isArray(parsed.slots) && parsed.slots.length ? parsed.slots : null
+          Array.isArray(parsed.slots) && parsed.slots.length ? parsed.slots : null,
+          String(rawStart).trim() || cleanStart,
+          dateKey
         )
       }
     }
@@ -302,28 +469,71 @@ function persistShiftConfig(cfg) {
   if (typeof window === 'undefined') return
   try {
     window.localStorage.setItem(SHIFT_STORAGE_KEY, JSON.stringify(cfg))
+    window.localStorage.setItem(SHIFT_RULES_STORAGE_KEY, JSON.stringify(shiftRules.value))
   } catch (_) {
     // Ignore storage quota errors
   }
 }
 
+function createEmptyShiftRow(
+  rowIdx = 0,
+  baseId = 'SHF-001',
+  shiftName = 'Shift A (Day)',
+  startTime = '08:00',
+  createdAtIso = new Date().toISOString(),
+  dateKey = toDateKey(new Date())
+) {
+  return {
+    id: `${baseId}-${rowIdx + 1}`,
+    section: '',
+    hour: '',
+    Shift: shiftName,
+    Shift_Start_time: startTime,
+    submissionDate: dateKey,
+    date: dateKey,
+    create_at: createdAtIso
+  }
+}
+
 function openShiftControlModal() {
-  const cleanStart = shiftConfig.value.Shift_Start_time || shiftConfig.value.startTime || '08:00'
+  const activeDateKey = toDateKey(submissionDate.value || shiftConfig.value.submissionDate || new Date())
+  submissionDate.value = activeDateKey
+
+  const cleanStart =
+    shiftConfig.value.Shift_Start_time || shiftConfig.value.startTime || '08:00'
   const currentHours = getConfiguredDurationHours(shiftConfig.value.durationHours)
   const computedEnd = calcEndTimeFromStart(cleanStart, currentHours)
   const cleanShift = shiftConfig.value.Shift || shiftConfig.value.shiftName || 'Shift A (Day)'
   const cleanId = shiftConfig.value.id || 'SHF-001'
   const createdAtIso = shiftConfig.value.create_at || new Date().toISOString()
-  const currentSlots = shiftConfig.value.slots?.length
-    ? shiftConfig.value.slots
-    : buildShiftSlotsFromStartPlus80Min(
-      cleanStart,
-      currentHours,
-      cleanShift,
-      cleanId,
-      createdAtIso,
-      null
-    )
+
+  const existingDateSlots = shiftRules.value.filter(
+    (r) => toDateKey(r.submissionDate || r.date) === activeDateKey
+  )
+
+  const initialSlots =
+    existingDateSlots.length > 0
+      ? [
+        ...existingDateSlots.map((r, idx) => ({
+          id: r.id || `${cleanId}-${idx + 1}`,
+          section: r.section || '',
+          hour: r.hour || r.section || '',
+          Shift: r.Shift || cleanShift,
+          Shift_Start_time: r.Shift_Start_time || cleanStart,
+          submissionDate: activeDateKey,
+          date: activeDateKey,
+          create_at: r.create_at || createdAtIso
+        })),
+        createEmptyShiftRow(
+          existingDateSlots.length,
+          cleanId,
+          cleanShift,
+          cleanStart,
+          new Date().toISOString(),
+          activeDateKey
+        )
+      ]
+      : [createEmptyShiftRow(0, cleanId, cleanShift, cleanStart, createdAtIso, activeDateKey)]
 
   shiftDraft.value = {
     id: cleanId,
@@ -333,10 +543,12 @@ function openShiftControlModal() {
     startTime: cleanStart,
     endTime: computedEnd,
     durationHours: currentHours,
+    submissionDate: activeDateKey,
+    date: activeDateKey,
     create_at: createdAtIso,
     autoAlignActiveHour: Boolean(shiftConfig.value.autoAlignActiveHour),
     recalcHourlyTargets: shiftConfig.value.recalcHourlyTargets !== false,
-    slots: currentSlots.map((s) => ({ ...s }))
+    slots: initialSlots
   }
   isShiftModalOpen.value = true
 }
@@ -345,104 +557,106 @@ function closeShiftControlModal() {
   isShiftModalOpen.value = false
 }
 
-function syncDraftRangeAndSlots() {
-  const hrs = getConfiguredDurationHours(shiftDraft.value.durationHours)
-  const cleanShift = shiftDraft.value.Shift || 'Shift A (Day)'
-  const cleanId = shiftDraft.value.id || 'SHF-001'
-  const createdAtIso = shiftDraft.value.create_at || new Date().toISOString()
-
-  shiftDraft.value.durationHours = hrs
-  shiftDraft.value.startTime = shiftDraft.value.Shift_Start_time
-  shiftDraft.value.shiftName = cleanShift
-  shiftDraft.value.endTime = calcEndTimeFromStart(shiftDraft.value.Shift_Start_time, hrs)
-  shiftDraft.value.slots = buildShiftSlotsFromStartPlus80Min(
-    shiftDraft.value.Shift_Start_time,
-    hrs,
-    cleanShift,
-    cleanId,
-    createdAtIso,
-    null
-  )
-}
-
-function onStartTimeInput(val) {
-  shiftDraft.value.Shift_Start_time = val
-  shiftDraft.value.startTime = val
-  const parsedMin = parseFlexibleTimeToMinutes(val, null)
-  if (parsedMin !== null) {
-    const formatted = formatMinutesToHHMM(parsedMin)
-    const hrs = getConfiguredDurationHours(shiftDraft.value.durationHours)
-    shiftDraft.value.endTime = calcEndTimeFromStart(formatted, hrs)
+function onSlotStartTimeTyping(slot, sIdx, rawVal) {
+  if (slot) {
+    slot.Shift_Start_time = rawVal
+  }
+  if (sIdx === 0) {
+    shiftDraft.value.Shift_Start_time = rawVal
+    shiftDraft.value.startTime = rawVal
   }
 }
 
-function commitTypedStartTime(val) {
-  const parsedMin = parseFlexibleTimeToMinutes(
-    val,
-    parseFlexibleTimeToMinutes(
-      shiftConfig.value.Shift_Start_time || shiftConfig.value.startTime,
-      8 * 60
-    )
-  )
-  const formatted = formatMinutesToHHMM(parsedMin)
-  shiftDraft.value.Shift_Start_time = formatted
-  shiftDraft.value.startTime = formatted
-  syncDraftRangeAndSlots()
-}
-
-function onShiftDropdownChange(selectedLabel) {
-  const matchedPreset = SHIFT_PRESETS.find((p) => p.label === selectedLabel)
-  if (matchedPreset) {
-    shiftDraft.value.Shift = matchedPreset.label
-    shiftDraft.value.shiftName = matchedPreset.label
-    shiftDraft.value.Shift_Start_time = matchedPreset.startTime
-    shiftDraft.value.startTime = matchedPreset.startTime
-    shiftDraft.value.durationHours = getConfiguredDurationHours(
-      matchedPreset.durationHours ?? shiftDraft.value.durationHours
-    )
-    syncDraftRangeAndSlots()
-    return
+function onSlotStartTimeChange(slot, sIdx, rawVal) {
+  const cleanText = String(rawVal ?? '').trim()
+  if (slot) {
+    slot.Shift_Start_time = cleanText
   }
-  const cleanLabel = selectedLabel || 'Custom Shift'
-  shiftDraft.value.Shift = cleanLabel
-  shiftDraft.value.shiftName = cleanLabel
+  if (sIdx === 0) {
+    shiftDraft.value.Shift_Start_time = cleanText
+    shiftDraft.value.startTime = cleanText
+  }
 }
 
-function onShiftHoursChange(nextHoursRaw) {
-  const parsed = Number(nextHoursRaw)
-  shiftDraft.value.durationHours =
-    Number.isFinite(parsed) && parsed > 0 ? Number(parsed.toFixed(2)) : DEFAULT_SHIFT_HOURS
-  syncDraftRangeAndSlots()
+function onShiftSectionChange(sIdx, selectedSection) {
+  const slots = shiftDraft.value.slots
+  if (!Array.isArray(slots) || !slots[sIdx]) return
+
+  const cleanSection = String(selectedSection || '').trim()
+  slots[sIdx].section = cleanSection
+  slots[sIdx].hour = cleanSection
+
+  if (cleanSection && sIdx === slots.length - 1) {
+    const baseId = shiftDraft.value.id || 'SHF-001'
+    const shiftName = slots[sIdx].Shift || shiftDraft.value.Shift || 'Shift A (Day)'
+    const startTime =
+      slots[sIdx].Shift_Start_time || shiftDraft.value.Shift_Start_time || '08:00'
+    const dateKey = toDateKey(submissionDate.value || shiftDraft.value.submissionDate)
+    slots.push(
+      createEmptyShiftRow(
+        slots.length,
+        baseId,
+        shiftName,
+        startTime,
+        new Date().toISOString(),
+        dateKey
+      )
+    )
+  }
 }
 
-function regenerateShiftSlotsFromTimes() {
-  commitTypedStartTime(shiftDraft.value.Shift_Start_time)
+function onShiftDropdownChange(sIdx, selectedLabel) {
+  const cleanLabel = String(selectedLabel || '').trim() || 'Shift A (Day)'
+  if (Array.isArray(shiftDraft.value.slots) && shiftDraft.value.slots[sIdx]) {
+    shiftDraft.value.slots[sIdx].Shift = cleanLabel
+  }
+  if (sIdx === 0) {
+    shiftDraft.value.Shift = cleanLabel
+    shiftDraft.value.shiftName = cleanLabel
+  }
 }
 
-function normalizeDraftSlotRatiosEvenly() {
-  const list = shiftDraft.value.slots || []
-  if (!list.length) return
-  const evenRatio = Number((1 / list.length).toFixed(4))
-  let running = 0
-  list.forEach((slot, idx) => {
-    if (idx === list.length - 1) {
-      slot.ratio = Number(Math.max(0.0001, 1 - running).toFixed(4))
-    } else {
-      slot.ratio = evenRatio
-      running += evenRatio
-    }
-  })
-}
-
-function applyShiftConfigToLines(nextConfig) {
+function applyShiftConfigToLines(nextConfig, savedDateKey = toDateKey(submissionDate.value)) {
   const slots = nextConfig.slots || []
   const maxSlotIdx = Math.max(0, slots.length - 1)
-  const effectiveStart = nextConfig.Shift_Start_time || nextConfig.startTime || '08:00'
-  const alignedSlotIdx = nextConfig.autoAlignActiveHour
-    ? findSlotIndexForScanTime(new Date(), effectiveStart, slots)
-    : null
+  const refNow = new Date()
 
   linesData.value.forEach((line, lIdx) => {
+    const lineSec = line.section || line.unit || ''
+    const lineShift = line.Shift || nextConfig.Shift
+    const matchedRule = resolveMatchingShiftRule({
+      date: savedDateKey,
+      section: lineSec,
+      shift: lineShift,
+      startTime: line.Shift_Start_time || null
+    })
+
+    const effectiveRuleStart =
+      matchedRule?.Shift_Start_time ||
+      matchedRule?.startTime ||
+      nextConfig.Shift_Start_time ||
+      nextConfig.startTime ||
+      '08:00'
+    const ruleStartMin = parseFlexibleTimeToMinutes(effectiveRuleStart, 8 * 60)
+    const cleanRuleStart = formatMinutesToHHMM(ruleStartMin)
+    const ruleHours = getConfiguredDurationHours(
+      matchedRule?.durationHours || nextConfig.durationHours
+    )
+    const ruleSlots = buildShiftSlotsFromStartPlus80Min(
+      cleanRuleStart,
+      ruleHours,
+      matchedRule?.Shift || lineShift,
+      matchedRule?.id || nextConfig.id,
+      matchedRule?.create_at || nextConfig.create_at,
+      null,
+      effectiveRuleStart,
+      savedDateKey
+    )
+
+    line.submissionDate = savedDateKey
+    line.Shift = matchedRule?.Shift || lineShift
+    line.Shift_Start_time = effectiveRuleStart
+
     const dailyTarget = Number(line.dailyTarget) || 0
     const existingRows = Array.isArray(line.hourlyRows) ? line.hourlyRows : []
     const existingBySlotLabel = new Map(
@@ -450,13 +664,15 @@ function applyShiftConfigToLines(nextConfig) {
     )
     let remaining = dailyTarget
 
-    line.hourlyRows = slots.map((slot, idx) => {
+    const baseSlotsForRows = slots.length ? slots : ruleSlots
+
+    line.hourlyRows = baseSlotsForRows.map((slot, idx) => {
       const slotLabel = String(slot.section || slot.hour || '').trim()
       const prev = existingBySlotLabel.get(slotLabel) || existingRows[idx]
-      const isLast = idx === slots.length - 1
+      const isLast = idx === baseSlotsForRows.length - 1
       const computedTarget = isLast
         ? Math.max(0, remaining)
-        : Math.round(dailyTarget * (Number(slot.ratio) || 1 / slots.length))
+        : Math.round(dailyTarget * (Number(slot.ratio) || 1 / baseSlotsForRows.length))
       remaining -= computedTarget
 
       const target =
@@ -492,8 +708,8 @@ function applyShiftConfigToLines(nextConfig) {
       }
     })
 
-    if (alignedSlotIdx !== null) {
-      line.activeHourIndex = alignedSlotIdx
+    if (matchedRule || nextConfig.autoAlignActiveHour) {
+      line.activeHourIndex = findSlotIndexForScanTime(refNow, cleanRuleStart, ruleSlots)
     } else {
       line.activeHourIndex = Math.min(Math.max(0, Number(line.activeHourIndex) || 0), maxSlotIdx)
     }
@@ -501,79 +717,120 @@ function applyShiftConfigToLines(nextConfig) {
 }
 
 function saveShiftControl() {
+  const savedDateKey = toDateKey(submissionDate.value || shiftDraft.value.submissionDate || new Date())
+  submissionDate.value = savedDateKey
+
+  const rawSlots = Array.isArray(shiftDraft.value.slots) ? shiftDraft.value.slots : []
+  const filledSlots = rawSlots.filter(
+    (slot) => String(slot.section || slot.hour || '').trim() !== ''
+  )
+
+  const firstSlotStartRaw = String(
+    filledSlots[0]?.Shift_Start_time ||
+    rawSlots[0]?.Shift_Start_time ||
+    shiftDraft.value.Shift_Start_time ||
+    shiftConfig.value.Shift_Start_time ||
+    '08:00'
+  ).trim()
+
   const parsedMin = parseFlexibleTimeToMinutes(
-    shiftDraft.value.Shift_Start_time,
+    firstSlotStartRaw,
     parseFlexibleTimeToMinutes(
       shiftConfig.value.Shift_Start_time || shiftConfig.value.startTime,
       8 * 60
     )
   )
-  const cleanStart = formatMinutesToHHMM(parsedMin)
+  const cleanStartHHMM = formatMinutesToHHMM(parsedMin)
   const hrs = getConfiguredDurationHours(shiftDraft.value.durationHours)
-  const cleanEnd = calcEndTimeFromStart(cleanStart, hrs)
+  const cleanEnd = calcEndTimeFromStart(cleanStartHHMM, hrs)
   const cleanShift =
-    String(shiftDraft.value.Shift || shiftDraft.value.shiftName || '').trim() || 'Shift A (Day)'
+    String(
+      filledSlots[0]?.Shift || shiftDraft.value.Shift || shiftDraft.value.shiftName || ''
+    ).trim() || 'Shift A (Day)'
   const recordId =
     String(shiftDraft.value.id || '').trim() || `SHF-${Date.now().toString().slice(-4)}`
   const createdAtIso = shiftDraft.value.create_at || new Date().toISOString()
 
-  shiftDraft.value.id = recordId
-  shiftDraft.value.Shift = cleanShift
-  shiftDraft.value.shiftName = cleanShift
-  shiftDraft.value.Shift_Start_time = cleanStart
-  shiftDraft.value.startTime = cleanStart
-  shiftDraft.value.durationHours = hrs
-  shiftDraft.value.endTime = cleanEnd
-  shiftDraft.value.create_at = createdAtIso
+  const normalizedSlots = filledSlots.map((slot, idx) => {
+    const sectionLabel = String(slot.section || slot.hour || '').trim()
+    const rawSlotStart = String(slot.Shift_Start_time || firstSlotStartRaw).trim()
+    const slotCreated = String(slot.create_at || createdAtIso)
+    return {
+      ...slot,
+      id: String(slot.id || `${recordId}-${idx + 1}`),
+      section: sectionLabel,
+      hour: sectionLabel,
+      Shift: String(slot.Shift || cleanShift),
+      Shift_Start_time: rawSlotStart,
+      submissionDate: savedDateKey,
+      date: savedDateKey,
+      create_at: slotCreated
+    }
+  })
 
-  const validSlots = buildShiftSlotsFromStartPlus80Min(
-    cleanStart,
-    hrs,
-    cleanShift,
-    recordId,
-    createdAtIso,
-    shiftDraft.value.slots
-  )
+  // Store rules keyed by submissionDate + section + Shift + Shift_Start_time
+  if (normalizedSlots.length > 0) {
+    const nextRuleMap = new Map(shiftRules.value.map((r) => [buildRuleSignature(r), r]))
+    normalizedSlots.forEach((slot) => {
+      nextRuleMap.set(buildRuleSignature(slot), { ...slot })
+    })
+    shiftRules.value = Array.from(nextRuleMap.values())
+  }
 
-  const backendRecords = validSlots.map((slot) => ({
-    id: slot.id,
-    section: slot.section,
-    Shift: cleanShift,
-    Shift_Start_time: cleanStart,
-    create_at: createdAtIso
-  }))
+  const nextSlots =
+    normalizedSlots.length > 0
+      ? buildShiftSlotsFromStartPlus80Min(
+        cleanStartHHMM,
+        hrs,
+        cleanShift,
+        recordId,
+        createdAtIso,
+        normalizedSlots,
+        firstSlotStartRaw,
+        savedDateKey
+      )
+      : shiftConfig.value.slots
 
   const nextConfig = {
+    ...shiftConfig.value,
     id: recordId,
     Shift: cleanShift,
     shiftName: cleanShift,
-    Shift_Start_time: cleanStart,
-    startTime: cleanStart,
+    Shift_Start_time: firstSlotStartRaw,
+    startTime: firstSlotStartRaw,
     endTime: cleanEnd,
     durationHours: hrs,
+    submissionDate: savedDateKey,
+    date: savedDateKey,
     create_at: createdAtIso,
     autoAlignActiveHour: Boolean(shiftDraft.value.autoAlignActiveHour),
     recalcHourlyTargets: Boolean(shiftDraft.value.recalcHourlyTargets),
-    slots: validSlots
+    slots: nextSlots
   }
 
   shiftConfig.value = nextConfig
   persistShiftConfig(nextConfig)
-  applyShiftConfigToLines(nextConfig)
+  applyShiftConfigToLines(nextConfig, savedDateKey)
 
   isShiftModalOpen.value = false
   lastUpdated.value = new Date().toLocaleTimeString()
-  notify(`${cleanShift} (${cleanStart} → ${cleanEnd}) saved with ${backendRecords.length} sections`)
+  notify(
+    `Saved ${normalizedSlots.length} rule(s) for ${savedDateKey} · ${cleanShift} (${firstSlotStartRaw})`
+  )
 
   sendToGasBackend('saveShiftConfig', {
-    shiftRecord: {
-      id: recordId,
-      section: validSlots[0]?.section || `${cleanStart} - ${cleanEnd}`,
-      Shift: cleanShift,
-      Shift_Start_time: cleanStart,
-      create_at: createdAtIso
-    },
-    shiftRecords: backendRecords,
+    submissionDate: savedDateKey,
+    date: savedDateKey,
+    shiftRules: JSON.parse(JSON.stringify(shiftRules.value)),
+    shiftRecords: normalizedSlots.map((slot) => ({
+      id: slot.id,
+      section: slot.section,
+      Shift: slot.Shift,
+      Shift_Start_time: slot.Shift_Start_time,
+      submissionDate: savedDateKey,
+      date: savedDateKey,
+      create_at: slot.create_at
+    })),
     shiftConfig: JSON.parse(JSON.stringify(nextConfig)),
     lines: JSON.parse(JSON.stringify(linesData.value))
   })
@@ -787,6 +1044,10 @@ function buildDefaultFallbackLines(totalLines = 33) {
       id: `line-${num}`,
       lineName: `Line-${num}`,
       unit: getUnitForLineIndex(idx),
+      section: '',
+      Shift: shiftConfig.value.Shift,
+      Shift_Start_time: shiftConfig.value.Shift_Start_time,
+      submissionDate: submissionDate.value,
       isActive: true,
       poNo: '',
       styleNo: '',
@@ -957,6 +1218,18 @@ function mapSheetRowToLine(rawRow, fallbackIdx = 0, existingLine = null) {
     ...(existingLine || {}),
     id,
     unit: unitName,
+    section: String(rawRow?.section ?? rawRow?.Section ?? existingLine?.section ?? '').trim(),
+    Shift: String(
+      rawRow?.Shift ?? rawRow?.shift ?? existingLine?.Shift ?? shiftConfig.value.Shift
+    ).trim(),
+    Shift_Start_time: String(
+      rawRow?.Shift_Start_time ??
+      existingLine?.Shift_Start_time ??
+      shiftConfig.value.Shift_Start_time
+    ).trim(),
+    submissionDate: toDateKey(
+      rawRow?.submissionDate ?? rawRow?.date ?? existingLine?.submissionDate ?? submissionDate.value
+    ),
     lineName: lineLabel,
     isActive:
       typeof rawRow?.isActive === 'boolean'
@@ -1133,7 +1406,9 @@ async function sendToGasBackend(action, payload, { silent = false } = {}) {
       body: JSON.stringify({
         action,
         payload,
+        submissionDate: submissionDate.value,
         shiftConfig: shiftConfig.value,
+        shiftRules: shiftRules.value,
         displayMeta: currentDisplayMeta.value
       })
     })
@@ -1163,7 +1438,9 @@ async function manualSyncBoardToGas() {
     const res = await sendToGasBackend(
       'syncBoardSnapshot',
       {
+        submissionDate: submissionDate.value,
         shiftConfig: JSON.parse(JSON.stringify(shiftConfig.value)),
+        shiftRules: JSON.parse(JSON.stringify(shiftRules.value)),
         lines: JSON.parse(JSON.stringify(linesData.value))
       },
       { silent: false }
@@ -1396,7 +1673,7 @@ function loadPopupForUnit(unitName) {
   const resolvedUnit = unitName || unitOptions.value[0] || 'Unit-1'
   popupDraft.value = {
     unit: resolvedUnit,
-    date: new Date().toISOString().slice(0, 10),
+    date: submissionDate.value || new Date().toISOString().slice(0, 10),
     recalcHourlyTargets: false,
     lines: buildUnitPopupRows(resolvedUnit)
   }
@@ -1502,6 +1779,10 @@ function saveLinePopup() {
         id: draftRow.lineId || `line-${globalIdx + 1}`,
         lineName: cleanLineName,
         unit: targetUnit,
+        section: '',
+        Shift: shiftConfig.value.Shift,
+        Shift_Start_time: shiftConfig.value.Shift_Start_time,
+        submissionDate: submissionDate.value,
         isActive: true,
         poNo: cleanPo,
         styleNo: cleanStyle,
@@ -1763,7 +2044,6 @@ async function confirmQrScan(overrideCode = '') {
     qrEntryOut.value.lineId = parsed.lineId
   }
 
-  // Map scan timestamp into shift slot (first slot = Shift_Start_time + 1h 20m)
   const mappedSlotIdx = findSlotIndexForScanTime(
     scanDate,
     shiftConfig.value.Shift_Start_time || shiftConfig.value.startTime,
@@ -1921,10 +2201,50 @@ function onHourlyDowntimeChange(line, rowIndex) {
 
 function computeLineMetrics(line, index = 0) {
   const isActive = line.isActive !== false
-  const activeIdx = line.activeHourIndex ?? 6
   const hourlyRows = Array.isArray(line.hourlyRows) ? line.hourlyRows : []
   const smv = Number(line.smv) || 14.0
   const dailyTarget = Number(line.dailyTarget) || 0
+
+  const activeDateKey = toDateKey(
+    line.submissionDate || line.date || submissionDate.value || new Date()
+  )
+  const lineSection = line.section || line.unit || ''
+  const lineShift = line.Shift || shiftConfig.value.Shift
+  const matchedRule = resolveMatchingShiftRule({
+    date: activeDateKey,
+    section: lineSection,
+    shift: lineShift,
+    startTime: line.Shift_Start_time || null
+  })
+
+  const effectiveStartLabel = String(
+    matchedRule?.Shift_Start_time ||
+    line.Shift_Start_time ||
+    shiftConfig.value.Shift_Start_time ||
+    shiftConfig.value.startTime ||
+    '08:00'
+  ).trim()
+  const ruleStartMin = parseFlexibleTimeToMinutes(effectiveStartLabel, 8 * 60)
+  const ruleHours = getConfiguredDurationHours(
+    matchedRule?.durationHours || shiftConfig.value.durationHours
+  )
+  const ruleSlots = buildShiftSlotsFromStartPlus80Min(
+    formatMinutesToHHMM(ruleStartMin),
+    ruleHours,
+    matchedRule?.Shift || lineShift,
+    matchedRule?.id || shiftConfig.value.id,
+    matchedRule?.create_at || shiftConfig.value.create_at,
+    null,
+    effectiveStartLabel,
+    activeDateKey
+  )
+
+  const activeIdx = matchedRule
+    ? findSlotIndexForScanTime(new Date(), formatMinutesToHHMM(ruleStartMin), ruleSlots)
+    : Math.min(
+      Math.max(0, Number(line.activeHourIndex) || 0),
+      Math.max(0, hourlyRows.length - 1)
+    )
 
   const totalActual = hourlyRows.reduce((sum, r) => sum + (Number(r.actual) || 0), 0)
   const totalQcPass = hourlyRows.reduce((sum, r) => {
@@ -1983,6 +2303,11 @@ function computeLineMetrics(line, index = 0) {
     smv,
     dailyTarget,
     hourlyRows,
+    activeHourIndex: activeIdx,
+    effectiveStartTime: effectiveStartLabel,
+    effectiveDate: activeDateKey,
+    matchedSection: matchedRule?.section || lineSection,
+    matchedShift: matchedRule?.Shift || lineShift,
     isActive,
     activeOperators,
     activeHelpers,
@@ -2039,6 +2364,7 @@ const filteredLineSummaryRows = computed(() => {
       !q ||
       line.unit.toLowerCase().includes(q) ||
       line.lineName.toLowerCase().includes(q) ||
+      (line.section || '').toLowerCase().includes(q) ||
       (line.isActive ? 'active' : 'deactive').includes(q) ||
       (line.poNo || '').toLowerCase().includes(q) ||
       line.styleNo.toLowerCase().includes(q) ||
@@ -2227,9 +2553,9 @@ const computedRows = computed(() => {
         : '0.0'
 
     let status = 'upcoming'
-    if (idx === line.activeHourIndex) {
+    if (idx === currentLineMetrics.value.activeHourIndex) {
       status = 'active'
-    } else if (cleanActual > 0 || idx < line.activeHourIndex) {
+    } else if (cleanActual > 0 || idx < currentLineMetrics.value.activeHourIndex) {
       status = cleanActual >= row.target ? 'on-target' : 'behind'
     }
 
@@ -2577,7 +2903,7 @@ onUnmounted(() => {
 
       <div class="header-actions">
         <button type="button" class="btn btn-shift" @click="openShiftControlModal">
-          Shift Control ({{ shiftConfig.Shift_Start_time }}–{{ shiftConfig.endTime }})
+          Shift Control
         </button>
         <button type="button" class="btn btn-popup" @click="openLinePopup()">
           + Unit &amp; Lines Popup
@@ -2611,8 +2937,7 @@ onUnmounted(() => {
       <div class="header-left">
         <div class="status-strip">
           <span class="chip chip-shift">
-            {{ shiftConfig.Shift }} · {{ shiftConfig.Shift_Start_time }} – {{ shiftConfig.endTime }}
-            (+{{ shiftConfig.durationHours }}h · {{ BASE_HOURS.length }} slots)
+            Date {{ submissionDate }} · {{ shiftConfig.Shift }} · Start {{ shiftConfig.Shift_Start_time }}
           </span>
           <span class="chip">Line Target: {{ totalDailyTarget.toLocaleString() }} pcs</span>
           <span class="chip">Target Eff: {{ targetEfficiency }}%</span>
@@ -2646,8 +2971,10 @@ onUnmounted(() => {
               <strong>+ Unit &amp; Lines Popup</strong> to enter lines · Updated {{ lastUpdated }}
             </template>
             <template v-else>
-              <strong>{{ shiftConfig.Shift }}</strong> ({{ shiftConfig.Shift_Start_time }} –
-              {{ shiftConfig.endTime }}, +{{ shiftConfig.durationHours }}h) · First slot +1h20m · Active
+              Date <strong>{{ submissionDate }}</strong> · <strong>{{ shiftConfig.Shift }}</strong> ({{
+                shiftConfig.Shift_Start_time
+              }}
+              – {{ shiftConfig.endTime }}, +{{ shiftConfig.durationHours }}h) · Active
               <strong>{{ activeLinesCount }}/{{ scopedLineMetrics.length }}</strong> lines · Target Eff
               <strong>{{ targetEfficiency }}%</strong> · Target
               <strong>{{ totalDailyTarget.toLocaleString() }} pcs</strong> · NPT
@@ -2656,9 +2983,9 @@ onUnmounted(() => {
             </template>
           </template>
           <template v-else-if="currentLine && currentLineMetrics">
-            <strong>{{ currentLine.unit }}</strong> · {{ shiftConfig.Shift }} ({{
-              shiftConfig.Shift_Start_time
-            }}–{{ shiftConfig.endTime }}, +{{ shiftConfig.durationHours }}h) · Item
+            <strong>{{ currentLine.unit }}</strong> · Date <strong>{{ submissionDate }}</strong> ·
+            {{ currentLineMetrics.matchedShift }} (Start:
+            <strong>{{ currentLineMetrics.effectiveStartTime }}</strong>) · Item
             <strong>{{ currentLine.itemName }}</strong> · PO
             <strong>{{ currentLine.poNo }}</strong> · Style <strong>{{ currentLine.styleNo }}</strong> · SMV
             <strong>{{ currentLine.smv }}m</strong> · Target Eff
@@ -2673,7 +3000,7 @@ onUnmounted(() => {
       </div>
     </header>
 
-    <!-- Shift Control Settings Modal (Backend fields: id, section, Shift, Shift_Start_time, create_at) -->
+    <!-- Shift Control Settings Modal -->
     <div v-if="isShiftModalOpen" class="modal-backdrop" role="dialog" aria-modal="true"
       aria-labelledby="shift-control-modal-title" @click.self="closeShiftControlModal">
       <div class="modal-card shift-modal-card">
@@ -2681,7 +3008,7 @@ onUnmounted(() => {
           <div>
             <span class="modal-badge shift-modal-badge">SHIFT CONTROL</span>
             <span id="shift-control-modal-title" class="xl-sheet-tab">
-              {{ shiftDraft.Shift }} · {{ shiftDraft.Shift_Start_time }} – {{ shiftDraft.endTime }}
+              {{ submissionDate }} · {{ shiftDraft.Shift }}
             </span>
           </div>
           <button type="button" class="modal-close-btn" aria-label="Close shift control popup"
@@ -2691,66 +3018,14 @@ onUnmounted(() => {
         </div>
 
         <form class="modal-form" @submit.prevent="saveShiftControl">
-          <div class="shift-time-grid">
-            <label class="field-group">
-              <span>id</span>
-              <input v-model="shiftDraft.id" type="text" class="form-input" placeholder="SHF-001" required />
+          <div class="shift-date-bar">
+            <label class="shift-date-label">
+              <span>DATE:</span>
+              <input v-model="submissionDate" type="date" class="shift-date-input" required />
             </label>
-
-            <label class="field-group">
-              <span>Shift</span>
-              <select :value="shiftDraft.Shift" aria-label="Select Shift" class="form-select"
-                @change="onShiftDropdownChange($event.target.value)">
-                <option v-for="preset in SHIFT_PRESETS" :key="preset.key" :value="preset.label">
-                  {{ preset.label }} ({{ preset.startTime }})
-                </option>
-                <option v-if="!SHIFT_PRESETS.some((p) => p.label === shiftDraft.Shift)" :value="shiftDraft.Shift">
-                  {{ shiftDraft.Shift }}
-                </option>
-                <option value="Custom Shift">Custom Shift</option>
-              </select>
-            </label>
-
-            <label class="field-group">
-              <span>Shift_Start_time (Type e.g. 08:00)</span>
-              <input v-model="shiftDraft.Shift_Start_time" type="text" class="form-input" placeholder="08:00" required
-                @input="onStartTimeInput($event.target.value)"
-                @blur="commitTypedStartTime(shiftDraft.Shift_Start_time)" />
-            </label>
-
-            <label class="field-group">
-              <span>Shift Hours</span>
-              <input :value="shiftDraft.durationHours" type="number" min="0.5" max="24" step="0.5" class="form-input"
-                required @change="onShiftHoursChange($event.target.value)" />
-            </label>
-          </div>
-
-          <div class="shift-options-stack">
-            <label class="modal-checkbox">
-              <input v-model="shiftDraft.autoAlignActiveHour" type="checkbox" />
-              <span>Auto-select active slot matching current clock time (Slot 1 = Shift_Start_time + 1h 20m)</span>
-            </label>
-
-            <label class="modal-checkbox">
-              <input v-model="shiftDraft.recalcHourlyTargets" type="checkbox" />
-              <span>Recalculate slot targets across all lines from each line's Daily Target</span>
-            </label>
-          </div>
-
-          <div class="shift-slots-toolbar">
             <span class="muted-sm">
-              Slots: <strong>{{ shiftDraft.slots.length }}</strong> · Slot 1 = <strong>+1h 20m</strong> ·
-              End: <strong>{{ shiftDraft.endTime }}</strong> · create_at:
-              <strong>{{ shiftDraft.create_at ? new Date(shiftDraft.create_at).toLocaleString() : 'Auto' }}</strong>
+              Calculations match Date (<strong>{{ submissionDate }}</strong>) + SECTION + SHIFT + SHIFT_START_TIME
             </span>
-            <div class="row-actions">
-              <button type="button" class="act-btn act-inspect" @click="regenerateShiftSlotsFromTimes">
-                Rebuild From Time
-              </button>
-              <button type="button" class="act-btn" @click="normalizeDraftSlotRatiosEvenly">
-                Equal Ratios
-              </button>
-            </div>
           </div>
 
           <div class="shift-slots-table-wrap">
@@ -2758,42 +3033,41 @@ onUnmounted(() => {
               <thead>
                 <tr>
                   <th>#</th>
-                  <th>id</th>
-                  <th>section</th>
-                  <th>Shift</th>
-                  <th>Shift_Start_time</th>
-                  <th>create_at</th>
+                  <th>SECTION</th>
+                  <th>SHIFT</th>
+                  <th>SHIFT_START_TIME</th>
+                  <th>CREATE_AT</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="(slot, sIdx) in shiftDraft.slots" :key="sIdx">
+                <tr v-for="(slot, sIdx) in shiftDraft.slots" :key="slot.id || sIdx">
                   <td class="xl-row-num">{{ sIdx + 1 }}</td>
                   <td class="xl-cell">
-                    <input v-model="slot.id" type="text" class="xl-input" />
-                  </td>
-                  <td class="xl-cell">
-                    <input v-model="slot.section" type="text" class="xl-input" @input="slot.hour = slot.section" />
-                  </td>
-                  <td class="xl-cell">
-                    <select :value="shiftDraft.Shift" aria-label="Row Shift" class="xl-select"
-                      @change="onShiftDropdownChange($event.target.value)">
-                      <option v-for="preset in SHIFT_PRESETS" :key="preset.key" :value="preset.label">
-                        {{ preset.label }}
+                    <select :value="slot.section" aria-label="Select section" class="xl-select"
+                      @change="onShiftSectionChange(sIdx, $event.target.value)">
+                      <option value="">-- Select section --</option>
+                      <option v-for="sec in SHIFT_SECTION_OPTIONS" :key="sec" :value="sec">
+                        {{ sec }}
                       </option>
-                      <option v-if="!SHIFT_PRESETS.some((p) => p.label === shiftDraft.Shift)" :value="shiftDraft.Shift">
-                        {{ shiftDraft.Shift }}
-                      </option>
-                      <option value="Custom Shift">Custom Shift</option>
                     </select>
                   </td>
                   <td class="xl-cell">
-                    <input
-                      :value="sIdx === 0 ? shiftDraft.Shift_Start_time : slot.section.split('-')[0]?.trim() || shiftDraft.Shift_Start_time"
-                      type="text" class="xl-input" :readonly="sIdx !== 0"
-                      @change="sIdx === 0 ? commitTypedStartTime($event.target.value) : null" />
+                    <select :value="slot.Shift || shiftDraft.Shift" aria-label="Row Shift" class="xl-select"
+                      @change="onShiftDropdownChange(sIdx, $event.target.value)">
+                      <option v-for="preset in SHIFT_PRESETS" :key="preset.key" :value="preset.label">
+                        {{ preset.label }}
+                      </option>
+                    </select>
+                  </td>
+                  <td class="xl-cell">
+                    <input :value="slot.Shift_Start_time" type="text" placeholder="e.g. 6 AM or 1PM" class="xl-input"
+                      @input="onSlotStartTimeTyping(slot, sIdx, $event.target.value)"
+                      @change="onSlotStartTimeChange(slot, sIdx, $event.target.value)" />
                   </td>
                   <td class="xl-cell shift-preview-cell">
-                    {{ new Date(slot.create_at || shiftDraft.create_at || Date.now()).toLocaleTimeString() }}
+                    {{
+                      new Date(slot.create_at || shiftDraft.create_at || Date.now()).toLocaleTimeString()
+                    }}
                   </td>
                 </tr>
               </tbody>
@@ -3826,44 +4100,39 @@ onUnmounted(() => {
   min-height: 0;
 }
 
-.shift-time-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-}
-
-@media (max-width: 760px) {
-  .shift-time-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 480px) {
-  .shift-time-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-.shift-options-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  background: rgba(15, 23, 42, 0.72);
-  border: 1px solid rgba(148, 163, 184, 0.15);
-  border-radius: 10px;
-  padding: 9px 12px;
-}
-
-.shift-slots-toolbar {
+.shift-date-bar {
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(56, 189, 248, 0.28);
+}
+
+.shift-date-label {
+  display: inline-flex;
+  align-items: center;
   gap: 8px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #bae6fd;
+}
+
+.shift-date-input {
+  background: #09101d;
+  color: #f8fafc;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  border-radius: 7px;
+  padding: 5px 9px;
+  font-size: 0.8rem;
+  font-family: inherit;
 }
 
 .shift-slots-table-wrap {
-  max-height: 32dvh;
+  max-height: 36dvh;
   overflow: auto;
   border: 1px solid rgba(148, 163, 184, 0.32);
   border-radius: 6px;
