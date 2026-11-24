@@ -8,13 +8,13 @@ const BACKEND_URL =
   'https://script.google.com/macros/s/AKfycbz9QfOx3G6ghMSuA9rtjEZLUPL7qJhn8laR2e2hFIzPgFnE7ch4Jb3K9tevP6wiWmcT/exec'
 
 const UNIT_LINE_SHEET = 'Unit_line_No'
-const SHIFT_STORAGE_KEY = 'mis_live_board_shift_config_v1'
+const SHIFT_STORAGE_KEY = 'mis_live_board_shift_config_v3'
 const LINES_PER_UNIT = 8
 const NPT_ALERT_THRESHOLD_MIN = 30
-const DEFAULT_FALLBACK_UNITS = ['Unit 01', 'Unit 02', 'Unit 03', 'Unit 04']
+const DEFAULT_FALLBACK_UNITS = ['Unit-1', 'Unit-2', 'Unit-3', 'Unit-4']
 
-const SHIFT_DURATION_HOURS = 1.15
-const SHIFT_DURATION_MINS = Math.round(SHIFT_DURATION_HOURS * 60) // 69 mins (1h 9m)
+const DEFAULT_SHIFT_HOURS = 8
+const FIRST_SLOT_OFFSET_MINUTES = 80 // 1 hour 20 minutes = 80 minutes
 
 const NPT_PROBLEM_TYPES = [
   'MACHINE PROBLEM',
@@ -26,29 +26,46 @@ const NPT_PROBLEM_TYPES = [
 ]
 
 const SHIFT_PRESETS = [
-  { key: 'DAY', label: 'Shift A (Day)', startTime: '08:00' },
-  { key: 'EVENING', label: 'Shift B (Evening)', startTime: '16:00' },
-  { key: 'NIGHT', label: 'Shift C (Night)', startTime: '00:00' }
+  { key: 'DAY', label: 'Shift A (Day)', startTime: '08:00', durationHours: 8 },
+  { key: 'EVENING', label: 'Shift B (Evening)', startTime: '16:00', durationHours: 8 },
+  { key: 'NIGHT', label: 'Shift C (Night)', startTime: '00:00', durationHours: 8 }
 ]
 
 const DEFAULT_SLOT_TEMPLATES = [
-  { ratio: 0.1125, dhu: 1.6, downtimeMin: 2, problem: 'MACHINE PROBLEM' },
+  { ratio: 0.14, dhu: 1.6, downtimeMin: 2, problem: 'MACHINE PROBLEM' },
   { ratio: 0.125, dhu: 1.4, downtimeMin: 0, problem: null },
   { ratio: 0.125, dhu: 1.9, downtimeMin: 3, problem: 'INPUT DELAY' },
   { ratio: 0.125, dhu: 1.3, downtimeMin: 0, problem: null },
-  { ratio: 0.1, dhu: 1.5, downtimeMin: 2, problem: 'RIB SHADE' },
+  { ratio: 0.11, dhu: 1.5, downtimeMin: 2, problem: 'RIB SHADE' },
   { ratio: 0.125, dhu: 1.4, downtimeMin: 0, problem: null },
   { ratio: 0.125, dhu: 1.2, downtimeMin: 0, problem: null },
-  { ratio: 0.125, dhu: 0.0, downtimeMin: 0, problem: null },
-  { ratio: 0.0375, dhu: 0.0, downtimeMin: 0, problem: null }
+  { ratio: 0.125, dhu: 0.0, downtimeMin: 0, problem: null }
 ]
 
-function parseTimeToMinutes(timeStr = '08:00') {
-  const match = String(timeStr || '').trim().match(/^(\d{1,2}):(\d{2})$/)
-  if (!match) return 8 * 60
-  const hh = Math.max(0, Math.min(23, Number(match[1]) || 0))
-  const mm = Math.max(0, Math.min(59, Number(match[2]) || 0))
-  return hh * 60 + mm
+function parseFlexibleTimeToMinutes(rawStr, fallbackMinutes = 8 * 60) {
+  const clean = String(rawStr || '').trim().toUpperCase()
+  if (!clean) return null
+
+  const ampmMatch = clean.match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)$/)
+  if (ampmMatch) {
+    let hh = Number(ampmMatch[1])
+    const mm = Number(ampmMatch[2] || 0)
+    const period = ampmMatch[3]
+    if (hh < 1 || hh > 12 || mm < 0 || mm > 59) return null
+    if (period === 'PM' && hh !== 12) hh += 12
+    if (period === 'AM' && hh === 12) hh = 0
+    return hh * 60 + mm
+  }
+
+  const h24Match = clean.match(/^(\d{1,2}):(\d{2})$/)
+  if (h24Match) {
+    const hh = Number(h24Match[1])
+    const mm = Number(h24Match[2])
+    if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null
+    return hh * 60 + mm
+  }
+
+  return fallbackMinutes
 }
 
 function formatMinutesToHHMM(totalMins) {
@@ -58,80 +75,84 @@ function formatMinutesToHHMM(totalMins) {
   return `${hh}:${mm}`
 }
 
-function calcEndTimeFromStart(startTime = '08:00', durationHours = SHIFT_DURATION_HOURS) {
-  const startMin = parseTimeToMinutes(startTime)
-  const durationMins = Math.round((Number(durationHours) || SHIFT_DURATION_HOURS) * 60)
+function getConfiguredDurationHours(fallbackHours = DEFAULT_SHIFT_HOURS) {
+  const hrs = Number(fallbackHours)
+  return Number.isFinite(hrs) && hrs > 0 ? Number(hrs.toFixed(2)) : DEFAULT_SHIFT_HOURS
+}
+
+function calcEndTimeFromStart(startTime = '08:00', durationHours = DEFAULT_SHIFT_HOURS) {
+  const startMin = parseFlexibleTimeToMinutes(startTime, 8 * 60)
+  const durationMins = Math.round(getConfiguredDurationHours(durationHours) * 60)
   return formatMinutesToHHMM(startMin + durationMins)
 }
 
-function getDurationMinutes(startTime = '08:00', endTime = null) {
-  const startMin = parseTimeToMinutes(startTime)
-  const resolvedEnd = endTime || calcEndTimeFromStart(startTime, SHIFT_DURATION_HOURS)
-  let endMin = parseTimeToMinutes(resolvedEnd)
-  if (endMin <= startMin) {
-    endMin += 1440
-  }
-  const diff = endMin - startMin
-  return diff > 0 ? diff : SHIFT_DURATION_MINS
-}
-
-function calcShiftDurationHours(startTime = '08:00', endTime = null) {
-  return Number((getDurationMinutes(startTime, endTime) / 60).toFixed(2))
-}
-
-function buildShiftSlotsFromRange(startTime = '08:00', endTime = null, customSlots = null) {
+function buildShiftSlotsFromStartPlus80Min(
+  startTime = '08:00',
+  durationHours = DEFAULT_SHIFT_HOURS,
+  shiftName = 'Shift A (Day)',
+  baseId = 'SHF-1',
+  createdAtIso = new Date().toISOString(),
+  customSlots = null
+) {
   if (Array.isArray(customSlots) && customSlots.length > 0) {
-    return customSlots.map((slot, idx) => ({
-      hour: String(slot.hour || '').trim(),
-      ratio: Number(slot.ratio) || 1 / customSlots.length,
-      dhu: Number(slot.dhu) || 0,
-      downtimeMin: Number(slot.downtimeMin) || 0,
-      problem: slot.problem ?? null,
-      index: idx
-    }))
+    return customSlots.map((slot, idx) => {
+      const sectionLabel = String(slot.section || slot.hour || '').trim()
+      return {
+        id: String(slot.id || `${baseId}-${idx + 1}`),
+        section: sectionLabel,
+        hour: sectionLabel,
+        Shift: String(slot.Shift || shiftName || 'Shift A (Day)'),
+        Shift_Start_time:
+          idx === 0
+            ? String(startTime || '08:00')
+            : sectionLabel.split('-')[0]?.trim() || String(startTime || '08:00'),
+        create_at: String(slot.create_at || createdAtIso),
+        ratio: Number(slot.ratio) || 1 / customSlots.length,
+        dhu: Number(slot.dhu) || 0,
+        downtimeMin: Number(slot.downtimeMin) || 0,
+        problem: slot.problem ?? null
+      }
+    })
   }
 
-  const effectiveEnd = endTime || calcEndTimeFromStart(startTime, SHIFT_DURATION_HOURS)
-  const startMin = parseTimeToMinutes(startTime)
-  let endMin = parseTimeToMinutes(effectiveEnd)
-  if (endMin <= startMin) {
-    endMin += 1440
-  }
+  const startMin = parseFlexibleTimeToMinutes(startTime, 8 * 60)
+  const totalShiftMins = Math.max(60, Math.round(getConfiguredDurationHours(durationHours) * 60))
+  const endMin = startMin + totalShiftMins
 
   const slots = []
   let cursor = startMin
   let idx = 0
+
   while (cursor < endMin && slots.length < 24) {
-    const nextCursor = Math.min(endMin, cursor + 60)
-    const sliceMins = nextCursor - cursor
-    const label = `${formatMinutesToHHMM(cursor)} - ${formatMinutesToHHMM(nextCursor)}`
+    // Slot 0 adds 1h 20m (80 minutes); remaining slots step by 60 minutes
+    const stepMins =
+      idx === 0
+        ? Math.min(FIRST_SLOT_OFFSET_MINUTES, endMin - cursor)
+        : Math.min(60, endMin - cursor)
+    const nextCursor = cursor + stepMins
+    const sectionLabel = `${formatMinutesToHHMM(cursor)} - ${formatMinutesToHHMM(nextCursor)}`
     const template = DEFAULT_SLOT_TEMPLATES[idx % DEFAULT_SLOT_TEMPLATES.length]
-    const baseRatio =
-      idx < DEFAULT_SLOT_TEMPLATES.length
-        ? DEFAULT_SLOT_TEMPLATES[idx].ratio
-        : 0.1
-    const adjustedRatio = Number((baseRatio * (sliceMins / 60)).toFixed(4))
+    const ratio = Number((stepMins / totalShiftMins).toFixed(4))
 
     slots.push({
-      hour: label,
-      ratio: adjustedRatio > 0 ? adjustedRatio : 0.1,
+      id: `${baseId}-${idx + 1}`,
+      section: sectionLabel,
+      hour: sectionLabel,
+      Shift: shiftName,
+      Shift_Start_time: formatMinutesToHHMM(cursor),
+      create_at: createdAtIso,
+      ratio: ratio > 0 ? ratio : 0.1,
       dhu: template.dhu,
       downtimeMin: template.downtimeMin,
       problem: template.problem
     })
+
     cursor = nextCursor
     idx += 1
   }
 
-  if (!slots.length) {
-    return DEFAULT_SLOT_TEMPLATES.map((t, i) => ({
-      hour: `${String(8 + i).padStart(2, '0')}:00 - ${String(9 + i).padStart(2, '0')}:00`,
-      ...t
-    }))
-  }
-
-  const ratioSum = slots.reduce((s, r) => s + (Number(r.ratio) || 0), 0)
-  if (ratioSum > 0) {
+  const ratioSum = slots.reduce((sum, s) => sum + (Number(s.ratio) || 0), 0)
+  if (slots.length > 0 && ratioSum > 0) {
     let acc = 0
     slots.forEach((slot, i) => {
       if (i === slots.length - 1) {
@@ -147,43 +168,84 @@ function buildShiftSlotsFromRange(startTime = '08:00', endTime = null, customSlo
   return slots
 }
 
-function findActiveSlotIndexForNow(startTime = '08:00', slotCount = 9) {
-  if (slotCount <= 1) return 0
-  const now = new Date()
-  const nowMin = now.getHours() * 60 + now.getMinutes()
-  const startMin = parseTimeToMinutes(startTime)
-  let elapsed = nowMin - startMin
-  if (elapsed < 0) elapsed += 1440
-  const idx = Math.floor(elapsed / 60)
-  return Math.max(0, Math.min(slotCount - 1, idx))
+/**
+ * Maps a QR scan timestamp (Date) to the active shift slot index.
+ * Any scan within [Shift_Start_time, Shift_Start_time + 80m) maps to slot 0 (first 1h 20m window).
+ */
+function findSlotIndexForScanTime(
+  scanDate = new Date(),
+  startTime = shiftConfig.value.Shift_Start_time || shiftConfig.value.startTime,
+  slots = BASE_HOURS.value
+) {
+  if (!Array.isArray(slots) || slots.length <= 1) return 0
+
+  const startMin = parseFlexibleTimeToMinutes(startTime, 8 * 60)
+  let scanMin = scanDate.getHours() * 60 + scanDate.getMinutes()
+  if (scanMin < startMin) {
+    scanMin += 1440
+  }
+
+  const elapsed = scanMin - startMin
+  if (elapsed < FIRST_SLOT_OFFSET_MINUTES) {
+    return 0
+  }
+
+  const afterFirst = elapsed - FIRST_SLOT_OFFSET_MINUTES
+  const extraIdx = Math.floor(afterFirst / 60) + 1
+  return Math.max(0, Math.min(slots.length - 1, extraIdx))
 }
 
+const initialId = 'SHF-001'
+const initialShift = 'Shift A (Day)'
 const initialStart = '08:00'
-const initialEnd = calcEndTimeFromStart(initialStart, SHIFT_DURATION_HOURS)
+const initialHours = DEFAULT_SHIFT_HOURS
+const initialEnd = calcEndTimeFromStart(initialStart, initialHours)
+const initialCreatedAt = new Date().toISOString()
 
 const shiftConfig = ref({
-  shiftName: 'Shift A (Day)',
+  id: initialId,
+  Shift: initialShift,
+  shiftName: initialShift,
+  Shift_Start_time: initialStart,
   startTime: initialStart,
   endTime: initialEnd,
+  durationHours: initialHours,
+  create_at: initialCreatedAt,
   autoAlignActiveHour: false,
   recalcHourlyTargets: true,
-  slots: buildShiftSlotsFromRange(initialStart, initialEnd)
+  slots: buildShiftSlotsFromStartPlus80Min(
+    initialStart,
+    initialHours,
+    initialShift,
+    initialId,
+    initialCreatedAt,
+    null
+  )
 })
 
 const BASE_HOURS = computed(() => shiftConfig.value.slots)
 
 const isShiftModalOpen = ref(false)
 const shiftDraft = ref({
-  shiftName: 'Shift A (Day)',
+  id: initialId,
+  Shift: initialShift,
+  shiftName: initialShift,
+  Shift_Start_time: initialStart,
   startTime: initialStart,
   endTime: initialEnd,
+  durationHours: initialHours,
+  create_at: initialCreatedAt,
   autoAlignActiveHour: false,
   recalcHourlyTargets: true,
   slots: []
 })
 
 const shiftDurationHours = computed(() =>
-  calcShiftDurationHours(shiftDraft.value.startTime, shiftDraft.value.endTime)
+  getConfiguredDurationHours(shiftDraft.value.durationHours)
+)
+
+const shiftDurationMinutes = computed(() =>
+  Math.round(shiftDurationHours.value * 60)
 )
 
 const shiftSlotRatioSum = computed(() =>
@@ -200,21 +262,33 @@ function loadSavedShiftConfig() {
     const raw = window.localStorage.getItem(SHIFT_STORAGE_KEY)
     if (!raw) return
     const parsed = JSON.parse(raw)
-    if (parsed && parsed.startTime) {
-      const cleanStart = /^(\d{1,2}):(\d{2})$/.test(String(parsed.startTime || '').trim())
-        ? formatMinutesToHHMM(parseTimeToMinutes(parsed.startTime))
-        : '08:00'
-      const computedEnd = calcEndTimeFromStart(cleanStart, SHIFT_DURATION_HOURS)
+    const rawStart = parsed?.Shift_Start_time ?? parsed?.startTime
+    if (parsed && rawStart) {
+      const parsedMin = parseFlexibleTimeToMinutes(rawStart, 8 * 60)
+      const cleanStart = formatMinutesToHHMM(parsedMin)
+      const savedHours = getConfiguredDurationHours(parsed.durationHours)
+      const computedEnd = calcEndTimeFromStart(cleanStart, savedHours)
+      const cleanShift = String(parsed.Shift || parsed.shiftName || 'Shift A (Day)').trim()
+      const cleanId = String(parsed.id || 'SHF-001').trim()
+      const createdAtIso = String(parsed.create_at || new Date().toISOString())
 
       shiftConfig.value = {
-        shiftName: String(parsed.shiftName || 'Custom Shift'),
+        id: cleanId,
+        Shift: cleanShift,
+        shiftName: cleanShift,
+        Shift_Start_time: cleanStart,
         startTime: cleanStart,
         endTime: computedEnd,
+        durationHours: savedHours,
+        create_at: createdAtIso,
         autoAlignActiveHour: Boolean(parsed.autoAlignActiveHour),
         recalcHourlyTargets: parsed.recalcHourlyTargets !== false,
-        slots: buildShiftSlotsFromRange(
+        slots: buildShiftSlotsFromStartPlus80Min(
           cleanStart,
-          computedEnd,
+          savedHours,
+          cleanShift,
+          cleanId,
+          createdAtIso,
           Array.isArray(parsed.slots) && parsed.slots.length ? parsed.slots : null
         )
       }
@@ -234,16 +308,32 @@ function persistShiftConfig(cfg) {
 }
 
 function openShiftControlModal() {
-  const cleanStart = shiftConfig.value.startTime || '08:00'
-  const computedEnd = calcEndTimeFromStart(cleanStart, SHIFT_DURATION_HOURS)
+  const cleanStart = shiftConfig.value.Shift_Start_time || shiftConfig.value.startTime || '08:00'
+  const currentHours = getConfiguredDurationHours(shiftConfig.value.durationHours)
+  const computedEnd = calcEndTimeFromStart(cleanStart, currentHours)
+  const cleanShift = shiftConfig.value.Shift || shiftConfig.value.shiftName || 'Shift A (Day)'
+  const cleanId = shiftConfig.value.id || 'SHF-001'
+  const createdAtIso = shiftConfig.value.create_at || new Date().toISOString()
   const currentSlots = shiftConfig.value.slots?.length
     ? shiftConfig.value.slots
-    : buildShiftSlotsFromRange(cleanStart, computedEnd)
+    : buildShiftSlotsFromStartPlus80Min(
+      cleanStart,
+      currentHours,
+      cleanShift,
+      cleanId,
+      createdAtIso,
+      null
+    )
 
   shiftDraft.value = {
-    shiftName: shiftConfig.value.shiftName || 'Shift A (Day)',
+    id: cleanId,
+    Shift: cleanShift,
+    shiftName: cleanShift,
+    Shift_Start_time: cleanStart,
     startTime: cleanStart,
     endTime: computedEnd,
+    durationHours: currentHours,
+    create_at: createdAtIso,
     autoAlignActiveHour: Boolean(shiftConfig.value.autoAlignActiveHour),
     recalcHourlyTargets: shiftConfig.value.recalcHourlyTargets !== false,
     slots: currentSlots.map((s) => ({ ...s }))
@@ -255,35 +345,78 @@ function closeShiftControlModal() {
   isShiftModalOpen.value = false
 }
 
-function onShiftStartTimeChange(nextStartRaw) {
-  const cleanStart = /^(\d{1,2}):(\d{2})$/.test(String(nextStartRaw || '').trim())
-    ? formatMinutesToHHMM(parseTimeToMinutes(nextStartRaw))
-    : '08:00'
+function syncDraftRangeAndSlots() {
+  const hrs = getConfiguredDurationHours(shiftDraft.value.durationHours)
+  const cleanShift = shiftDraft.value.Shift || 'Shift A (Day)'
+  const cleanId = shiftDraft.value.id || 'SHF-001'
+  const createdAtIso = shiftDraft.value.create_at || new Date().toISOString()
 
-  shiftDraft.value.startTime = cleanStart
-  shiftDraft.value.endTime = calcEndTimeFromStart(cleanStart, SHIFT_DURATION_HOURS)
-
-  shiftDraft.value.slots = buildShiftSlotsFromRange(
-    shiftDraft.value.startTime,
-    shiftDraft.value.endTime
+  shiftDraft.value.durationHours = hrs
+  shiftDraft.value.startTime = shiftDraft.value.Shift_Start_time
+  shiftDraft.value.shiftName = cleanShift
+  shiftDraft.value.endTime = calcEndTimeFromStart(shiftDraft.value.Shift_Start_time, hrs)
+  shiftDraft.value.slots = buildShiftSlotsFromStartPlus80Min(
+    shiftDraft.value.Shift_Start_time,
+    hrs,
+    cleanShift,
+    cleanId,
+    createdAtIso,
+    null
   )
 }
 
-function applyShiftPreset(preset) {
-  const cleanStart = preset.startTime
-  const computedEnd = calcEndTimeFromStart(cleanStart, SHIFT_DURATION_HOURS)
-  shiftDraft.value.shiftName = preset.label
-  shiftDraft.value.startTime = cleanStart
-  shiftDraft.value.endTime = computedEnd
-  shiftDraft.value.slots = buildShiftSlotsFromRange(cleanStart, computedEnd)
+function onStartTimeInput(val) {
+  shiftDraft.value.Shift_Start_time = val
+  shiftDraft.value.startTime = val
+  const parsedMin = parseFlexibleTimeToMinutes(val, null)
+  if (parsedMin !== null) {
+    const formatted = formatMinutesToHHMM(parsedMin)
+    const hrs = getConfiguredDurationHours(shiftDraft.value.durationHours)
+    shiftDraft.value.endTime = calcEndTimeFromStart(formatted, hrs)
+  }
+}
+
+function commitTypedStartTime(val) {
+  const parsedMin = parseFlexibleTimeToMinutes(
+    val,
+    parseFlexibleTimeToMinutes(
+      shiftConfig.value.Shift_Start_time || shiftConfig.value.startTime,
+      8 * 60
+    )
+  )
+  const formatted = formatMinutesToHHMM(parsedMin)
+  shiftDraft.value.Shift_Start_time = formatted
+  shiftDraft.value.startTime = formatted
+  syncDraftRangeAndSlots()
+}
+
+function onShiftDropdownChange(selectedLabel) {
+  const matchedPreset = SHIFT_PRESETS.find((p) => p.label === selectedLabel)
+  if (matchedPreset) {
+    shiftDraft.value.Shift = matchedPreset.label
+    shiftDraft.value.shiftName = matchedPreset.label
+    shiftDraft.value.Shift_Start_time = matchedPreset.startTime
+    shiftDraft.value.startTime = matchedPreset.startTime
+    shiftDraft.value.durationHours = getConfiguredDurationHours(
+      matchedPreset.durationHours ?? shiftDraft.value.durationHours
+    )
+    syncDraftRangeAndSlots()
+    return
+  }
+  const cleanLabel = selectedLabel || 'Custom Shift'
+  shiftDraft.value.Shift = cleanLabel
+  shiftDraft.value.shiftName = cleanLabel
+}
+
+function onShiftHoursChange(nextHoursRaw) {
+  const parsed = Number(nextHoursRaw)
+  shiftDraft.value.durationHours =
+    Number.isFinite(parsed) && parsed > 0 ? Number(parsed.toFixed(2)) : DEFAULT_SHIFT_HOURS
+  syncDraftRangeAndSlots()
 }
 
 function regenerateShiftSlotsFromTimes() {
-  shiftDraft.value.endTime = calcEndTimeFromStart(shiftDraft.value.startTime, SHIFT_DURATION_HOURS)
-  shiftDraft.value.slots = buildShiftSlotsFromRange(
-    shiftDraft.value.startTime,
-    shiftDraft.value.endTime
-  )
+  commitTypedStartTime(shiftDraft.value.Shift_Start_time)
 }
 
 function normalizeDraftSlotRatiosEvenly() {
@@ -304,8 +437,9 @@ function normalizeDraftSlotRatiosEvenly() {
 function applyShiftConfigToLines(nextConfig) {
   const slots = nextConfig.slots || []
   const maxSlotIdx = Math.max(0, slots.length - 1)
+  const effectiveStart = nextConfig.Shift_Start_time || nextConfig.startTime || '08:00'
   const alignedSlotIdx = nextConfig.autoAlignActiveHour
-    ? findActiveSlotIndexForNow(nextConfig.startTime, slots.length)
+    ? findSlotIndexForScanTime(new Date(), effectiveStart, slots)
     : null
 
   linesData.value.forEach((line, lIdx) => {
@@ -317,7 +451,8 @@ function applyShiftConfigToLines(nextConfig) {
     let remaining = dailyTarget
 
     line.hourlyRows = slots.map((slot, idx) => {
-      const prev = existingBySlotLabel.get(String(slot.hour || '').trim()) || existingRows[idx]
+      const slotLabel = String(slot.section || slot.hour || '').trim()
+      const prev = existingBySlotLabel.get(slotLabel) || existingRows[idx]
       const isLast = idx === slots.length - 1
       const computedTarget = isLast
         ? Math.max(0, remaining)
@@ -331,23 +466,23 @@ function applyShiftConfigToLines(nextConfig) {
       const dhu = prev ? Math.max(0, Number(prev.dhu) || 0) : actual > 0 ? slot.dhu : 0
       const qcPass = prev
         ? Math.min(
-            actual,
-            Math.max(0, Math.round(Number(prev.qcPass) ?? calcHourQcPass(actual, dhu)))
-          )
+          actual,
+          Math.max(0, Math.round(Number(prev.qcPass) ?? calcHourQcPass(actual, dhu)))
+        )
         : calcHourQcPass(actual, dhu)
       const downtimeMin = prev ? Math.max(0, Number(prev.downtimeMin) || 0) : 0
       const nptProblems = prev
         ? normalizeNptProblems(
-            prev.nptProblems,
-            downtimeMin,
-            slot.problem || NPT_PROBLEM_TYPES[(lIdx + idx) % NPT_PROBLEM_TYPES.length],
-            lIdx,
-            idx
-          )
+          prev.nptProblems,
+          downtimeMin,
+          slot.problem || NPT_PROBLEM_TYPES[(lIdx + idx) % NPT_PROBLEM_TYPES.length],
+          lIdx,
+          idx
+        )
         : []
 
       return {
-        hour: slot.hour,
+        hour: slotLabel,
         target,
         actual,
         qcPass,
@@ -366,42 +501,57 @@ function applyShiftConfigToLines(nextConfig) {
 }
 
 function saveShiftControl() {
-  const cleanStart = /^(\d{1,2}):(\d{2})$/.test(String(shiftDraft.value.startTime || '').trim())
-    ? formatMinutesToHHMM(parseTimeToMinutes(shiftDraft.value.startTime))
-    : '08:00'
-  const cleanEnd = calcEndTimeFromStart(cleanStart, SHIFT_DURATION_HOURS)
+  const parsedMin = parseFlexibleTimeToMinutes(
+    shiftDraft.value.Shift_Start_time,
+    parseFlexibleTimeToMinutes(
+      shiftConfig.value.Shift_Start_time || shiftConfig.value.startTime,
+      8 * 60
+    )
+  )
+  const cleanStart = formatMinutesToHHMM(parsedMin)
+  const hrs = getConfiguredDurationHours(shiftDraft.value.durationHours)
+  const cleanEnd = calcEndTimeFromStart(cleanStart, hrs)
+  const cleanShift =
+    String(shiftDraft.value.Shift || shiftDraft.value.shiftName || '').trim() || 'Shift A (Day)'
+  const recordId =
+    String(shiftDraft.value.id || '').trim() || `SHF-${Date.now().toString().slice(-4)}`
+  const createdAtIso = shiftDraft.value.create_at || new Date().toISOString()
+
+  shiftDraft.value.id = recordId
+  shiftDraft.value.Shift = cleanShift
+  shiftDraft.value.shiftName = cleanShift
+  shiftDraft.value.Shift_Start_time = cleanStart
+  shiftDraft.value.startTime = cleanStart
+  shiftDraft.value.durationHours = hrs
   shiftDraft.value.endTime = cleanEnd
+  shiftDraft.value.create_at = createdAtIso
 
-  const cleanName = String(shiftDraft.value.shiftName || '').trim() || `${cleanStart} - ${cleanEnd}`
+  const validSlots = buildShiftSlotsFromStartPlus80Min(
+    cleanStart,
+    hrs,
+    cleanShift,
+    recordId,
+    createdAtIso,
+    shiftDraft.value.slots
+  )
 
-  const validSlots =
-    Array.isArray(shiftDraft.value.slots) && shiftDraft.value.slots.length > 0
-      ? shiftDraft.value.slots.map((s, idx) => ({
-          hour: String(s.hour || '').trim() || `Slot ${idx + 1}`,
-          ratio: Math.max(0.0001, Number(s.ratio) || 1 / shiftDraft.value.slots.length),
-          dhu: Math.max(0, Number(s.dhu) || 0),
-          downtimeMin: Math.max(0, Number(s.downtimeMin) || 0),
-          problem: s.problem || null
-        }))
-      : buildShiftSlotsFromRange(cleanStart, cleanEnd)
-
-  const ratioSum = validSlots.reduce((acc, s) => acc + s.ratio, 0)
-  if (ratioSum > 0) {
-    let running = 0
-    validSlots.forEach((s, idx) => {
-      if (idx === validSlots.length - 1) {
-        s.ratio = Number(Math.max(0.0001, 1 - running).toFixed(4))
-      } else {
-        s.ratio = Number((s.ratio / ratioSum).toFixed(4))
-        running += s.ratio
-      }
-    })
-  }
+  const backendRecords = validSlots.map((slot) => ({
+    id: slot.id,
+    section: slot.section,
+    Shift: cleanShift,
+    Shift_Start_time: cleanStart,
+    create_at: createdAtIso
+  }))
 
   const nextConfig = {
-    shiftName: cleanName,
+    id: recordId,
+    Shift: cleanShift,
+    shiftName: cleanShift,
+    Shift_Start_time: cleanStart,
     startTime: cleanStart,
     endTime: cleanEnd,
+    durationHours: hrs,
+    create_at: createdAtIso,
     autoAlignActiveHour: Boolean(shiftDraft.value.autoAlignActiveHour),
     recalcHourlyTargets: Boolean(shiftDraft.value.recalcHourlyTargets),
     slots: validSlots
@@ -413,9 +563,17 @@ function saveShiftControl() {
 
   isShiftModalOpen.value = false
   lastUpdated.value = new Date().toLocaleTimeString()
-  notify(`Start ${cleanStart} → End ${cleanEnd} (+${SHIFT_DURATION_HOURS}h) · ${cleanName}`)
+  notify(`${cleanShift} (${cleanStart} → ${cleanEnd}) saved with ${backendRecords.length} sections`)
 
   sendToGasBackend('saveShiftConfig', {
+    shiftRecord: {
+      id: recordId,
+      section: validSlots[0]?.section || `${cleanStart} - ${cleanEnd}`,
+      Shift: cleanShift,
+      Shift_Start_time: cleanStart,
+      create_at: createdAtIso
+    },
+    shiftRecords: backendRecords,
     shiftConfig: JSON.parse(JSON.stringify(nextConfig)),
     lines: JSON.parse(JSON.stringify(linesData.value))
   })
@@ -462,7 +620,7 @@ const QR_OPTIONS = [
 
 function getUnitForLineIndex(index, linesPerUnit = LINES_PER_UNIT) {
   const unitNum = Math.floor(Math.max(0, index) / linesPerUnit) + 1
-  return `Unit ${String(unitNum).padStart(2, '0')}`
+  return `Unit-${unitNum}`
 }
 
 function inferItemName(styleNo = '') {
@@ -549,7 +707,7 @@ function buildHourlyRows(dailyTarget, activeHourIndex = 6, lineIndex = 0) {
       slot.problem || NPT_PROBLEM_TYPES[(lineIndex + idx) % NPT_PROBLEM_TYPES.length]
 
     return {
-      hour: slot.hour,
+      hour: slot.section || slot.hour,
       target,
       actual,
       qcPass: calcHourQcPass(actual, dhu),
@@ -586,21 +744,21 @@ function normalizeLineRows(rawRows, lineIndex = 0) {
 
 function aggregateProblemsFromRows(hourlyRows) {
   const map = {}
-  ;(hourlyRows || []).forEach((r, idx) => {
-    const mins = Math.max(0, Number(r.downtimeMin) || 0)
-    if (mins <= 0) return
-    const items = normalizeNptProblems(
-      r.nptProblems,
-      mins,
-      NPT_PROBLEM_TYPES[idx % NPT_PROBLEM_TYPES.length],
-      0,
-      idx
-    )
-    items.forEach((entry) => {
-      const key = entry.problem || 'MACHINE PROBLEM'
-      map[key] = (map[key] || 0) + (Number(entry.minutes) || 0)
+    ; (hourlyRows || []).forEach((r, idx) => {
+      const mins = Math.max(0, Number(r.downtimeMin) || 0)
+      if (mins <= 0) return
+      const items = normalizeNptProblems(
+        r.nptProblems,
+        mins,
+        NPT_PROBLEM_TYPES[idx % NPT_PROBLEM_TYPES.length],
+        0,
+        idx
+      )
+      items.forEach((entry) => {
+        const key = entry.problem || 'MACHINE PROBLEM'
+        map[key] = (map[key] || 0) + (Number(entry.minutes) || 0)
+      })
     })
-  })
   return Object.entries(map)
     .map(([problem, minutes]) => ({ problem, minutes }))
     .sort((a, b) => b.minutes - a.minutes)
@@ -609,7 +767,7 @@ function aggregateProblemsFromRows(hourlyRows) {
 function mergeProblemSummaries(summaries) {
   const map = {}
   summaries.forEach((list) => {
-    ;(list || []).forEach((item) => {
+    ; (list || []).forEach((item) => {
       const key = item.problem || 'MACHINE PROBLEM'
       map[key] = (map[key] || 0) + (Number(item.minutes) || 0)
     })
@@ -625,10 +783,9 @@ const itemOptions = ref(Object.values(ITEM_NAMES_BY_TYPE))
 function buildDefaultFallbackLines(totalLines = 33) {
   return Array.from({ length: totalLines }, (_, idx) => {
     const num = idx + 1
-    const padded = String(num).padStart(2, '0')
     return {
-      id: `line-${padded}`,
-      lineName: `Line ${padded}`,
+      id: `line-${num}`,
+      lineName: `Line-${num}`,
       unit: getUnitForLineIndex(idx),
       isActive: true,
       poNo: '',
@@ -692,7 +849,7 @@ let clockTimer = null
 const isPopupOpen = ref(false)
 const excelGridRef = ref(null)
 const popupDraft = ref({
-  unit: 'Unit 01',
+  unit: 'Unit-1',
   date: new Date().toISOString().slice(0, 10),
   recalcHourlyTargets: false,
   lines: []
@@ -717,8 +874,8 @@ const cameraError = ref('')
 let html5QrScanner = null
 
 const qrEntryOut = ref({
-  lineId: 'line-01',
-  hourIndex: 6,
+  lineId: 'line-1',
+  hourIndex: 0,
   qty: null,
   qcPass: null,
   dhu: 1.2,
@@ -744,27 +901,27 @@ function notify(msg) {
 function normalizeLineIdFromLabel(label, fallbackIdx = 0) {
   const match = String(label || '').match(/(\d+)/)
   if (match) {
-    return `line-${String(Number(match[1])).padStart(2, '0')}`
+    return `line-${Number(match[1])}`
   }
-  return `line-${String(fallbackIdx + 1).padStart(2, '0')}`
+  return `line-${fallbackIdx + 1}`
 }
 
 function mapSheetRowToLine(rawRow, fallbackIdx = 0, existingLine = null) {
   const unitName = String(
     rawRow?.Unit ??
-      rawRow?.unit ??
-      rawRow?.unitName ??
-      existingLine?.unit ??
-      getUnitForLineIndex(fallbackIdx)
+    rawRow?.unit ??
+    rawRow?.unitName ??
+    existingLine?.unit ??
+    getUnitForLineIndex(fallbackIdx)
   ).trim()
 
   const lineLabel = String(
     rawRow?.Line_No ??
-      rawRow?.line_no ??
-      rawRow?.lineNo ??
-      rawRow?.lineName ??
-      existingLine?.lineName ??
-      `Line ${String(fallbackIdx + 1).padStart(2, '0')}`
+    rawRow?.line_no ??
+    rawRow?.lineNo ??
+    rawRow?.lineName ??
+    existingLine?.lineName ??
+    `Line-${fallbackIdx + 1}`
   ).trim()
 
   const id = String(
@@ -778,10 +935,10 @@ function mapSheetRowToLine(rawRow, fallbackIdx = 0, existingLine = null) {
   const dailyTarget =
     Number(
       rawRow?.dailyTarget ??
-        rawRow?.Daily_Target ??
-        rawRow?.target ??
-        existingLine?.dailyTarget ??
-        1400
+      rawRow?.Daily_Target ??
+      rawRow?.target ??
+      existingLine?.dailyTarget ??
+      1400
     ) || 1400
 
   const activeHourIndex =
@@ -811,10 +968,10 @@ function mapSheetRowToLine(rawRow, fallbackIdx = 0, existingLine = null) {
     styleNo,
     itemName: String(
       rawRow?.itemName ??
-        rawRow?.Item_name ??
-        rawRow?.Item_Name ??
-        existingLine?.itemName ??
-        inferItemName(styleNo)
+      rawRow?.Item_name ??
+      rawRow?.Item_Name ??
+      existingLine?.itemName ??
+      inferItemName(styleNo)
     ).trim(),
     modelNo: String(
       rawRow?.modelNo ?? rawRow?.Model_No ?? existingLine?.modelNo ?? 'MOD-ALPHA-V2'
@@ -831,10 +988,10 @@ function mapSheetRowToLine(rawRow, fallbackIdx = 0, existingLine = null) {
     targetEfficiency:
       Number(
         rawRow?.targetEfficiency ??
-          rawRow?.Target_Efficiency ??
-          rawRow?.target_efficiency ??
-          existingLine?.targetEfficiency ??
-          75
+        rawRow?.Target_Efficiency ??
+        rawRow?.target_efficiency ??
+        existingLine?.targetEfficiency ??
+        75
       ) || 75,
     maxLineGap: Number(rawRow?.maxLineGap ?? existingLine?.maxLineGap ?? 60) || 60,
     firstMachineTotal:
@@ -901,14 +1058,14 @@ function extractItemNameFromRow(row) {
   if (!row || typeof row !== 'object') return ''
   return String(
     row.Item_name ??
-      row.Item_Name ??
-      row.itemName ??
-      row.item_name ??
-      row.Item ??
-      row.item ??
-      row.Name ??
-      row.name ??
-      ''
+    row.Item_Name ??
+    row.itemName ??
+    row.item_name ??
+    row.Item ??
+    row.item ??
+    row.Name ??
+    row.name ??
+    ''
   ).trim()
 }
 
@@ -1037,7 +1194,7 @@ const lineDropdownOptions = computed(() => {
   const source = linesData.value.length > 0 ? linesData.value : buildDefaultFallbackLines(33)
   return source.map((line, idx) => ({
     id: line.id,
-    lineName: line.lineName || `Line ${String(idx + 1).padStart(2, '0')}`,
+    lineName: line.lineName || `Line-${idx + 1}`,
     unit: line.unit || getUnitForLineIndex(idx),
     poNo: line.poNo || '',
     styleNo: line.styleNo || '',
@@ -1080,7 +1237,7 @@ const qrTargetLine = computed(() => {
     linesData.value[0] || {
       id: '',
       lineName: 'No Line',
-      unit: popupDraft.value.unit || 'Unit 01',
+      unit: popupDraft.value.unit || 'Unit-1',
       firstMachineTotal: 0,
       hourlyRows: []
     }
@@ -1236,7 +1393,7 @@ function buildUnitPopupRows(unitName) {
 }
 
 function loadPopupForUnit(unitName) {
-  const resolvedUnit = unitName || unitOptions.value[0] || 'Unit 01'
+  const resolvedUnit = unitName || unitOptions.value[0] || 'Unit-1'
   popupDraft.value = {
     unit: resolvedUnit,
     date: new Date().toISOString().slice(0, 10),
@@ -1263,7 +1420,7 @@ async function openLinePopup(lineId = null) {
     initialUnit = currentLine.value.unit || getUnitForLineIndex(idx >= 0 ? idx : 0)
   }
   if (!initialUnit) {
-    initialUnit = unitOptions.value[0] || 'Unit 01'
+    initialUnit = unitOptions.value[0] || 'Unit-1'
   }
 
   loadPopupForUnit(initialUnit)
@@ -1282,9 +1439,9 @@ function isRowPopulated(row) {
   if (!row) return false
   return Boolean(
     String(row.lineId || '').trim() ||
-      String(row.lineName || '').trim() ||
-      String(row.poNo || '').trim() ||
-      String(row.styleNo || '').trim()
+    String(row.lineName || '').trim() ||
+    String(row.poNo || '').trim() ||
+    String(row.styleNo || '').trim()
   )
 }
 
@@ -1295,8 +1452,8 @@ const popupTotals = computed(() => {
   const dailyTarget = rows.reduce((s, r) => s + (Number(r.dailyTarget) || 0), 0)
   const avgTargetEff = rows.length
     ? (
-        rows.reduce((s, r) => s + (Number(r.targetEfficiency) || 75), 0) / rows.length
-      ).toFixed(1)
+      rows.reduce((s, r) => s + (Number(r.targetEfficiency) || 75), 0) / rows.length
+    ).toFixed(1)
     : '75.0'
   return {
     totalLines: rows.length,
@@ -1309,14 +1466,14 @@ const popupTotals = computed(() => {
 })
 
 function saveLinePopup() {
-  const targetUnit = String(popupDraft.value.unit || '').trim() || 'Unit 01'
+  const targetUnit = String(popupDraft.value.unit || '').trim() || 'Unit-1'
   const populatedRows = popupDraft.value.lines.filter(isRowPopulated)
   const updatedLines = []
   const slots = BASE_HOURS.value
 
   populatedRows.forEach((draftRow, rowIdx) => {
     const cleanLineName =
-      String(draftRow.lineName || '').trim() || `Line ${String(rowIdx + 1).padStart(2, '0')}`
+      String(draftRow.lineName || '').trim() || `Line-${rowIdx + 1}`
     const cleanPo = String(draftRow.poNo || '').trim()
     const cleanStyle = String(draftRow.styleNo || '').trim()
     const cleanItemName =
@@ -1342,7 +1499,7 @@ function saveLinePopup() {
     } else {
       const globalIdx = linesData.value.length
       line = {
-        id: draftRow.lineId || `line-${String(globalIdx + 1).padStart(2, '0')}`,
+        id: draftRow.lineId || `line-${globalIdx + 1}`,
         lineName: cleanLineName,
         unit: targetUnit,
         isActive: true,
@@ -1480,12 +1637,16 @@ async function openQrEntryPopup() {
   const defaultLine = !isAllLines.value
     ? currentLine.value
     : linesInSelectedUnit.value[0] || linesData.value[0]
-  const maxIdx = Math.max(0, BASE_HOURS.value.length - 1)
+  const matchedSlotIdx = findSlotIndexForScanTime(
+    new Date(),
+    shiftConfig.value.Shift_Start_time || shiftConfig.value.startTime,
+    BASE_HOURS.value
+  )
 
   await resetQrFlowState(false)
   qrEntryOut.value = {
-    lineId: defaultLine?.id || 'line-01',
-    hourIndex: Math.min(Math.max(0, defaultLine?.activeHourIndex ?? 0), maxIdx),
+    lineId: defaultLine?.id || 'line-1',
+    hourIndex: matchedSlotIdx,
     qty: null,
     qcPass: null,
     dhu: 1.2,
@@ -1561,7 +1722,7 @@ function parseQrPayload(rawText) {
   if (lineMatch) {
     const num = Number(lineMatch[1])
     if (num >= 1 && num <= 33) {
-      lineId = `line-${String(num).padStart(2, '0')}`
+      lineId = `line-${num}`
     }
   }
 
@@ -1588,9 +1749,9 @@ async function confirmQrScan(overrideCode = '') {
     await stopQrCamera()
   }
 
-  const now = new Date()
-  const scanTimeStr = now.toLocaleTimeString()
-  const scanIsoStr = now.toISOString()
+  const scanDate = new Date()
+  const scanTimeStr = scanDate.toLocaleTimeString()
+  const scanIsoStr = scanDate.toISOString()
 
   const parsed = parseQrPayload(rawCode)
   scannedQrCode.value = parsed?.raw || rawCode
@@ -1601,6 +1762,14 @@ async function confirmQrScan(overrideCode = '') {
   if (parsed?.lineId) {
     qrEntryOut.value.lineId = parsed.lineId
   }
+
+  // Map scan timestamp into shift slot (first slot = Shift_Start_time + 1h 20m)
+  const mappedSlotIdx = findSlotIndexForScanTime(
+    scanDate,
+    shiftConfig.value.Shift_Start_time || shiftConfig.value.startTime,
+    BASE_HOURS.value
+  )
+  qrEntryOut.value.hourIndex = mappedSlotIdx
 
   const targetLineObj =
     linesData.value.find((l) => l.id === qrEntryOut.value.lineId) || linesData.value[0]
@@ -1620,7 +1789,7 @@ function insertScannedQrRecord(scanTimeStr, scanIsoStr) {
   scannedLineLabel.value = resolvedLineName
 
   const idx = Math.min(
-    Math.max(0, Number(qrEntryOut.value.hourIndex) ?? line.activeHourIndex ?? 0),
+    Math.max(0, Number(qrEntryOut.value.hourIndex) ?? 0),
     line.hourlyRows.length - 1
   )
   const row = line.hourlyRows[idx]
@@ -1633,7 +1802,7 @@ function insertScannedQrRecord(scanTimeStr, scanIsoStr) {
   if (selectedQrOption.value === 'FIRST_MC') {
     const lineActual = line.hourlyRows.reduce((s, r) => s + r.actual, 0)
     line.firstMachineTotal = Math.max(lineActual, line.firstMachineTotal + qty)
-    logSummary = `1st M/C +${qty} pcs on ${resolvedLineName} (${line.unit}) · Scanned at ${scanTimeStr}`
+    logSummary = `1st M/C +${qty} pcs on ${resolvedLineName} (${row.hour}) · Scanned at ${scanTimeStr}`
     historyBadge = `+${qty} 1st M/C`
   } else if (selectedQrOption.value === 'LAST_MC') {
     row.actual += qty
@@ -1662,7 +1831,7 @@ function insertScannedQrRecord(scanTimeStr, scanIsoStr) {
   }
 
   lastUpdated.value = scanTimeStr
-  qrScanFeedback.value = `Inserted "${scannedQrCode.value}" · Line: ${resolvedLineName} · Scan Time: ${scanTimeStr} (${historyBadge}).`
+  qrScanFeedback.value = `Slot ${idx + 1} (${row.hour}) · "${scannedQrCode.value}" · Line: ${resolvedLineName} · Scan Time: ${scanTimeStr} (${historyBadge}).`
 
   qrScanHistory.value.unshift({
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -1670,6 +1839,7 @@ function insertScannedQrRecord(scanTimeStr, scanIsoStr) {
     scannedAt: scanIsoStr,
     optionLabel: activeOptionMeta.value?.label || selectedQrOption.value,
     lineName: resolvedLineName,
+    slotLabel: row.hour,
     qrCode: scannedQrCode.value,
     summary: historyBadge
   })
@@ -1918,11 +2088,11 @@ function buildUnitSubtotalRow(unitName, unitLines) {
     : 0
   const targetEffAvg = lineCount
     ? Number(
-        (
-          activeUnitLines.reduce((s, l) => s + (Number(l.targetEfficiency) || 75), 0) /
-          lineCount
-        ).toFixed(1)
-      )
+      (
+        activeUnitLines.reduce((s, l) => s + (Number(l.targetEfficiency) || 75), 0) /
+        lineCount
+      ).toFixed(1)
+    )
     : 75
 
   return {
@@ -2362,12 +2532,8 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div
-    class="board-shell"
-    :class="`mode-${displayMode}`"
-    :data-display-mode="displayMode"
-    :data-orientation="isPortrait ? 'portrait' : 'landscape'"
-  >
+  <div class="board-shell" :class="`mode-${displayMode}`" :data-display-mode="displayMode"
+    :data-orientation="isPortrait ? 'portrait' : 'landscape'">
     <transition name="fade">
       <div v-if="toastMessage" class="toast-banner">{{ toastMessage }}</div>
     </transition>
@@ -2379,24 +2545,16 @@ onUnmounted(() => {
           <span class="pulse-dot"></span>
           {{ isLiveSimulating ? 'LIVE STREAMING' : 'BOARD READY' }}
         </span>
-        <select
-          :value="selectedUnit"
-          aria-label="Select Unit"
-          class="unit-select"
-          @change="selectUnit($event.target.value)"
-        >
+        <select :value="selectedUnit" aria-label="Select Unit" class="unit-select"
+          @change="selectUnit($event.target.value)">
           <option value="ALL">All Units ({{ linesData.length }})</option>
           <option v-for="u in unitOptions" :key="u" :value="u">
             {{ u }}
           </option>
         </select>
 
-        <select
-          :value="selectedLineId"
-          aria-label="Jump directly to a specific line"
-          class="line-select"
-          @change="onLineSelectChange($event.target.value)"
-        >
+        <select :value="selectedLineId" aria-label="Jump directly to a specific line" class="line-select"
+          @change="onLineSelectChange($event.target.value)">
           <option value="ALL">
             {{
               selectedUnit === 'ALL'
@@ -2409,28 +2567,17 @@ onUnmounted(() => {
           </option>
         </select>
 
-        <input
-          v-if="isAllLines"
-          v-model="searchQuery"
-          type="search"
-          aria-label="Search PO, Style, Item, Line or Buyer"
-          placeholder="Search PO, Style, Item, Line..."
-          class="search-input"
-        />
+        <input v-if="isAllLines" v-model="searchQuery" type="search" aria-label="Search PO, Style, Item, Line or Buyer"
+          placeholder="Search PO, Style, Item, Line..." class="search-input" />
 
-        <button
-          v-if="!isAllLines && currentLine"
-          type="button"
-          class="pill-btn"
-          @click="openLinePopup(currentLine.id)"
-        >
+        <button v-if="!isAllLines && currentLine" type="button" class="pill-btn" @click="openLinePopup(currentLine.id)">
           Edit {{ currentLine.unit }} Lines
         </button>
       </div>
 
       <div class="header-actions">
         <button type="button" class="btn btn-shift" @click="openShiftControlModal">
-          Shift Control ({{ shiftConfig.startTime }}–{{ shiftConfig.endTime }})
+          Shift Control ({{ shiftConfig.Shift_Start_time }}–{{ shiftConfig.endTime }})
         </button>
         <button type="button" class="btn btn-popup" @click="openLinePopup()">
           + Unit &amp; Lines Popup
@@ -2443,30 +2590,16 @@ onUnmounted(() => {
         </button>
         <button type="button" class="btn btn-soft" @click="advanceHour">Next Hour</button>
         <button type="button" class="btn btn-outline" @click="resetShift">Reset</button>
-        <button
-          type="button"
-          class="btn btn-soft"
-          :disabled="isSyncingGas"
-          @click="manualSyncBoardToGas"
-        >
+        <button type="button" class="btn btn-soft" :disabled="isSyncingGas" @click="manualSyncBoardToGas">
           {{ isSyncingGas ? 'Syncing...' : 'Sync to GAS' }}
         </button>
         <div class="filter-controls">
-          <button
-            v-if="isAllLines"
-            type="button"
-            class="filter-toggle"
-            :class="{ active: onlyActiveLines }"
-            @click="onlyActiveLines = !onlyActiveLines"
-          >
+          <button v-if="isAllLines" type="button" class="filter-toggle" :class="{ active: onlyActiveLines }"
+            @click="onlyActiveLines = !onlyActiveLines">
             Active Only
           </button>
-          <button
-            type="button"
-            class="filter-toggle"
-            :class="{ active: onlyGapAlerts }"
-            @click="onlyGapAlerts = !onlyGapAlerts"
-          >
+          <button type="button" class="filter-toggle" :class="{ active: onlyGapAlerts }"
+            @click="onlyGapAlerts = !onlyGapAlerts">
             Gap Alerts ({{ alertLinesCount }})
           </button>
         </div>
@@ -2478,8 +2611,8 @@ onUnmounted(() => {
       <div class="header-left">
         <div class="status-strip">
           <span class="chip chip-shift">
-            {{ shiftConfig.shiftName }} · {{ shiftConfig.startTime }} – {{ shiftConfig.endTime }}
-            (+{{ SHIFT_DURATION_HOURS }}h · {{ BASE_HOURS.length }} slots)
+            {{ shiftConfig.Shift }} · {{ shiftConfig.Shift_Start_time }} – {{ shiftConfig.endTime }}
+            (+{{ shiftConfig.durationHours }}h · {{ BASE_HOURS.length }} slots)
           </span>
           <span class="chip">Line Target: {{ totalDailyTarget.toLocaleString() }} pcs</span>
           <span class="chip">Target Eff: {{ targetEfficiency }}%</span>
@@ -2513,8 +2646,8 @@ onUnmounted(() => {
               <strong>+ Unit &amp; Lines Popup</strong> to enter lines · Updated {{ lastUpdated }}
             </template>
             <template v-else>
-              <strong>{{ shiftConfig.shiftName }}</strong> ({{ shiftConfig.startTime }} –
-              {{ shiftConfig.endTime }}, +{{ SHIFT_DURATION_HOURS }}h) · Active
+              <strong>{{ shiftConfig.Shift }}</strong> ({{ shiftConfig.Shift_Start_time }} –
+              {{ shiftConfig.endTime }}, +{{ shiftConfig.durationHours }}h) · First slot +1h20m · Active
               <strong>{{ activeLinesCount }}/{{ scopedLineMetrics.length }}</strong> lines · Target Eff
               <strong>{{ targetEfficiency }}%</strong> · Target
               <strong>{{ totalDailyTarget.toLocaleString() }} pcs</strong> · NPT
@@ -2523,9 +2656,10 @@ onUnmounted(() => {
             </template>
           </template>
           <template v-else-if="currentLine && currentLineMetrics">
-            <strong>{{ currentLine.unit }}</strong> · {{ shiftConfig.shiftName }} ({{
-              shiftConfig.startTime
-            }}–{{ shiftConfig.endTime }}) · Item <strong>{{ currentLine.itemName }}</strong> · PO
+            <strong>{{ currentLine.unit }}</strong> · {{ shiftConfig.Shift }} ({{
+              shiftConfig.Shift_Start_time
+            }}–{{ shiftConfig.endTime }}, +{{ shiftConfig.durationHours }}h) · Item
+            <strong>{{ currentLine.itemName }}</strong> · PO
             <strong>{{ currentLine.poNo }}</strong> · Style <strong>{{ currentLine.styleNo }}</strong> · SMV
             <strong>{{ currentLine.smv }}m</strong> · Target Eff
             <strong>{{ currentLineMetrics.targetEfficiency }}%</strong> · Updated {{ lastUpdated }}
@@ -2539,118 +2673,81 @@ onUnmounted(() => {
       </div>
     </header>
 
-    <!-- Shift Control Settings Modal -->
-    <div
-      v-if="isShiftModalOpen"
-      class="modal-backdrop"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="shift-control-modal-title"
-      @click.self="closeShiftControlModal"
-    >
+    <!-- Shift Control Settings Modal (Backend fields: id, section, Shift, Shift_Start_time, create_at) -->
+    <div v-if="isShiftModalOpen" class="modal-backdrop" role="dialog" aria-modal="true"
+      aria-labelledby="shift-control-modal-title" @click.self="closeShiftControlModal">
       <div class="modal-card shift-modal-card">
         <div class="modal-head">
           <div>
             <span class="modal-badge shift-modal-badge">SHIFT CONTROL</span>
             <span id="shift-control-modal-title" class="xl-sheet-tab">
-              {{ shiftDraft.startTime }} – {{ shiftDraft.endTime }} (+{{ SHIFT_DURATION_HOURS }}h)
+              {{ shiftDraft.Shift }} · {{ shiftDraft.Shift_Start_time }} – {{ shiftDraft.endTime }}
             </span>
           </div>
-          <button
-            type="button"
-            class="modal-close-btn"
-            aria-label="Close shift control popup"
-            @click="closeShiftControlModal"
-          >
+          <button type="button" class="modal-close-btn" aria-label="Close shift control popup"
+            @click="closeShiftControlModal">
             ✕
           </button>
         </div>
 
         <form class="modal-form" @submit.prevent="saveShiftControl">
-          <div class="shift-preset-row">
-            <span class="preset-label">Quick Presets:</span>
-            <button
-              v-for="preset in SHIFT_PRESETS"
-              :key="preset.key"
-              type="button"
-              class="preset-chip"
-              :class="{
-                'preset-chip-active': shiftDraft.startTime === preset.startTime
-              }"
-              @click="applyShiftPreset(preset)"
-            >
-              {{ preset.label }} ({{ preset.startTime }} →
-              {{ calcEndTimeFromStart(preset.startTime, SHIFT_DURATION_HOURS) }})
-            </button>
-          </div>
-
           <div class="shift-time-grid">
             <label class="field-group">
-              <span>Shift Name</span>
-              <input
-                v-model="shiftDraft.shiftName"
-                type="text"
-                class="form-input"
-                placeholder="Shift A (Day)"
-                required
-              />
+              <span>id</span>
+              <input v-model="shiftDraft.id" type="text" class="form-input" placeholder="SHF-001" required />
             </label>
 
             <label class="field-group">
-              <span>Shift Start Time</span>
-              <input
-                :value="shiftDraft.startTime"
-                type="time"
-                class="form-input"
-                required
-                @change="onShiftStartTimeChange($event.target.value)"
-              />
+              <span>Shift</span>
+              <select :value="shiftDraft.Shift" aria-label="Select Shift" class="form-select"
+                @change="onShiftDropdownChange($event.target.value)">
+                <option v-for="preset in SHIFT_PRESETS" :key="preset.key" :value="preset.label">
+                  {{ preset.label }} ({{ preset.startTime }})
+                </option>
+                <option v-if="!SHIFT_PRESETS.some((p) => p.label === shiftDraft.Shift)" :value="shiftDraft.Shift">
+                  {{ shiftDraft.Shift }}
+                </option>
+                <option value="Custom Shift">Custom Shift</option>
+              </select>
             </label>
 
             <label class="field-group">
-              <span>End Time (+{{ SHIFT_DURATION_HOURS }}h / {{ SHIFT_DURATION_MINS }}m)</span>
-              <input
-                :value="shiftDraft.endTime"
-                type="text"
-                class="form-input"
-                readonly
-              />
+              <span>Shift_Start_time (Type e.g. 08:00)</span>
+              <input v-model="shiftDraft.Shift_Start_time" type="text" class="form-input" placeholder="08:00" required
+                @input="onStartTimeInput($event.target.value)"
+                @blur="commitTypedStartTime(shiftDraft.Shift_Start_time)" />
+            </label>
+
+            <label class="field-group">
+              <span>Shift Hours</span>
+              <input :value="shiftDraft.durationHours" type="number" min="0.5" max="24" step="0.5" class="form-input"
+                required @change="onShiftHoursChange($event.target.value)" />
             </label>
           </div>
 
           <div class="shift-options-stack">
             <label class="modal-checkbox">
               <input v-model="shiftDraft.autoAlignActiveHour" type="checkbox" />
-              <span>Auto-select active hour slot matching current clock time</span>
+              <span>Auto-select active slot matching current clock time (Slot 1 = Shift_Start_time + 1h 20m)</span>
             </label>
 
             <label class="modal-checkbox">
               <input v-model="shiftDraft.recalcHourlyTargets" type="checkbox" />
-              <span>Recalculate hourly targets across all lines from each line's Daily Target</span>
+              <span>Recalculate slot targets across all lines from each line's Daily Target</span>
             </label>
           </div>
 
           <div class="shift-slots-toolbar">
             <span class="muted-sm">
-              Slots: <strong>{{ shiftDraft.slots.length }}</strong> · End Time:
-              <strong>{{ shiftDraft.endTime }}</strong> (+{{ shiftDurationHours }}h) · Ratio Sum:
-              <strong :class="Math.abs(shiftSlotRatioSum - 1) < 0.02 ? 'tone-green' : 'tone-amber'">
-                {{ shiftSlotRatioSum }}
-              </strong>
+              Slots: <strong>{{ shiftDraft.slots.length }}</strong> · Slot 1 = <strong>+1h 20m</strong> ·
+              End: <strong>{{ shiftDraft.endTime }}</strong> · create_at:
+              <strong>{{ shiftDraft.create_at ? new Date(shiftDraft.create_at).toLocaleString() : 'Auto' }}</strong>
             </span>
             <div class="row-actions">
-              <button
-                type="button"
-                class="act-btn act-inspect"
-                @click="regenerateShiftSlotsFromTimes"
-              >
+              <button type="button" class="act-btn act-inspect" @click="regenerateShiftSlotsFromTimes">
                 Rebuild From Time
               </button>
-              <button
-                type="button"
-                class="act-btn"
-                @click="normalizeDraftSlotRatiosEvenly"
-              >
+              <button type="button" class="act-btn" @click="normalizeDraftSlotRatiosEvenly">
                 Equal Ratios
               </button>
             </div>
@@ -2661,44 +2758,42 @@ onUnmounted(() => {
               <thead>
                 <tr>
                   <th>#</th>
-                  <th>Hour Slot</th>
-                  <th>Target Ratio</th>
-                  <th>Sample Target (1,400 pcs)</th>
-                  <th>Default DHU %</th>
+                  <th>id</th>
+                  <th>section</th>
+                  <th>Shift</th>
+                  <th>Shift_Start_time</th>
+                  <th>create_at</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="(slot, sIdx) in shiftDraft.slots" :key="sIdx">
                   <td class="xl-row-num">{{ sIdx + 1 }}</td>
                   <td class="xl-cell">
-                    <input
-                      v-model="slot.hour"
-                      type="text"
-                      class="xl-input"
-                    />
+                    <input v-model="slot.id" type="text" class="xl-input" />
+                  </td>
+                  <td class="xl-cell">
+                    <input v-model="slot.section" type="text" class="xl-input" @input="slot.hour = slot.section" />
+                  </td>
+                  <td class="xl-cell">
+                    <select :value="shiftDraft.Shift" aria-label="Row Shift" class="xl-select"
+                      @change="onShiftDropdownChange($event.target.value)">
+                      <option v-for="preset in SHIFT_PRESETS" :key="preset.key" :value="preset.label">
+                        {{ preset.label }}
+                      </option>
+                      <option v-if="!SHIFT_PRESETS.some((p) => p.label === shiftDraft.Shift)" :value="shiftDraft.Shift">
+                        {{ shiftDraft.Shift }}
+                      </option>
+                      <option value="Custom Shift">Custom Shift</option>
+                    </select>
                   </td>
                   <td class="xl-cell">
                     <input
-                      v-model.number="slot.ratio"
-                      type="number"
-                      step="0.005"
-                      min="0.001"
-                      max="1"
-                      class="xl-input xl-num"
-                    />
+                      :value="sIdx === 0 ? shiftDraft.Shift_Start_time : slot.section.split('-')[0]?.trim() || shiftDraft.Shift_Start_time"
+                      type="text" class="xl-input" :readonly="sIdx !== 0"
+                      @change="sIdx === 0 ? commitTypedStartTime($event.target.value) : null" />
                   </td>
                   <td class="xl-cell shift-preview-cell">
-                    {{ Math.round(1400 * (Number(slot.ratio) || 0)).toLocaleString() }} pcs
-                  </td>
-                  <td class="xl-cell">
-                    <input
-                      v-model.number="slot.dhu"
-                      type="number"
-                      step="0.1"
-                      min="0"
-                      max="100"
-                      class="xl-input xl-num"
-                    />
+                    {{ new Date(slot.create_at || shiftDraft.create_at || Date.now()).toLocaleTimeString() }}
                   </td>
                 </tr>
               </tbody>
@@ -2710,7 +2805,7 @@ onUnmounted(() => {
               Cancel
             </button>
             <button type="submit" class="btn btn-primary">
-              Apply Shift Time
+              Save Shift Config
             </button>
           </div>
         </form>
@@ -2718,14 +2813,8 @@ onUnmounted(() => {
     </div>
 
     <!-- Single-Unit Header + Excel Grid Table Popup Modal -->
-    <div
-      v-if="isPopupOpen"
-      class="modal-backdrop"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="line-setup-popup-title"
-      @click.self="closeLinePopup"
-    >
+    <div v-if="isPopupOpen" class="modal-backdrop" role="dialog" aria-modal="true"
+      aria-labelledby="line-setup-popup-title" @click.self="closeLinePopup">
       <div class="modal-card unit-popup-card">
         <div class="modal-head">
           <div>
@@ -2734,12 +2823,7 @@ onUnmounted(() => {
               {{ popupDraft.unit }} · Line Setup Sheet
             </span>
           </div>
-          <button
-            type="button"
-            class="modal-close-btn"
-            aria-label="Close popup"
-            @click="closeLinePopup"
-          >
+          <button type="button" class="modal-close-btn" aria-label="Close popup" @click="closeLinePopup">
             ✕
           </button>
         </div>
@@ -2748,11 +2832,8 @@ onUnmounted(() => {
           <div class="popup-unit-head-bar">
             <label class="field-group popup-unit-select-wrap">
               <span class="popup-unit-label">Unit:-</span>
-              <select
-                :value="popupDraft.unit"
-                class="form-select popup-unit-select"
-                @change="onPopupUnitChange($event.target.value)"
-              >
+              <select :value="popupDraft.unit" class="form-select popup-unit-select"
+                @change="onPopupUnitChange($event.target.value)">
                 <option v-for="u in unitOptions" :key="u" :value="u">
                   {{ u }}
                 </option>
@@ -2781,10 +2862,8 @@ onUnmounted(() => {
               =SUM({{ popupDraft.unit }}) · Rows: <strong>{{ popupTotals.totalLines }}</strong> ·
               Avg Eff: <strong>{{ popupTotals.avgTargetEff }}%</strong> ·
               Manpower:
-              <strong
-                >{{ popupTotals.operators }} Op + {{ popupTotals.helpers }} Hlp =
-                {{ popupTotals.manpower }}</strong
-              >
+              <strong>{{ popupTotals.operators }} Op + {{ popupTotals.helpers }} Hlp =
+                {{ popupTotals.manpower }}</strong>
               · Target: <strong>{{ popupTotals.dailyTarget.toLocaleString() }} pcs</strong>
             </span>
           </div>
@@ -2809,13 +2888,9 @@ onUnmounted(() => {
                 <tr v-for="(row, rIdx) in popupDraft.lines" :key="row.rowUid" class="xl-data-row">
                   <td class="xl-row-num">{{ rIdx + 1 }}</td>
                   <td class="xl-cell">
-                    <select
-                      :value="row.lineId"
-                      aria-label="Select Line under Unit"
-                      class="xl-select xl-w-line"
+                    <select :value="row.lineId" aria-label="Select Line under Unit" class="xl-select xl-w-line"
                       @change="onGridLineDropdownChange(rIdx, $event.target.value)"
-                      @keydown="handleExcelGridKeydown($event, rIdx, 0)"
-                    >
+                      @keydown="handleExcelGridKeydown($event, rIdx, 0)">
                       <option value="">-- Select Line --</option>
                       <option v-for="opt in popupUnitLineChoices" :key="opt.id" :value="opt.id">
                         {{ opt.lineName }}
@@ -2823,88 +2898,40 @@ onUnmounted(() => {
                     </select>
                   </td>
                   <td class="xl-cell">
-                    <input
-                      v-model="row.poNo"
-                      type="text"
-                      class="xl-input xl-w-po"
-                      placeholder="PO-44102"
-                      @keydown="handleExcelGridKeydown($event, rIdx, 1)"
-                    />
+                    <input v-model="row.poNo" type="text" class="xl-input xl-w-po" placeholder="PO-44102"
+                      @keydown="handleExcelGridKeydown($event, rIdx, 1)" />
                   </td>
                   <td class="xl-cell">
-                    <input
-                      v-model="row.styleNo"
-                      type="text"
-                      class="xl-input xl-w-style"
-                      placeholder="STY-7710-WVN"
-                      @keydown="handleExcelGridKeydown($event, rIdx, 2)"
-                    />
+                    <input v-model="row.styleNo" type="text" class="xl-input xl-w-style" placeholder="STY-7710-WVN"
+                      @keydown="handleExcelGridKeydown($event, rIdx, 2)" />
                   </td>
                   <td class="xl-cell">
-                    <select
-                      v-model="row.itemName"
-                      aria-label="Item Name"
-                      class="xl-select xl-w-item"
-                      @keydown="handleExcelGridKeydown($event, rIdx, 3)"
-                    >
+                    <select v-model="row.itemName" aria-label="Item Name" class="xl-select xl-w-item"
+                      @keydown="handleExcelGridKeydown($event, rIdx, 3)">
                       <option v-for="item in getRowItemChoices(row)" :key="item" :value="item">
                         {{ item }}
                       </option>
                     </select>
                   </td>
                   <td class="xl-cell">
-                    <input
-                      v-model.number="row.smv"
-                      type="number"
-                      inputmode="decimal"
-                      min="0.1"
-                      step="0.1"
-                      class="xl-input xl-num xl-w-smv"
-                      @keydown="handleExcelGridKeydown($event, rIdx, 4)"
-                    />
+                    <input v-model.number="row.smv" type="number" inputmode="decimal" min="0.1" step="0.1"
+                      class="xl-input xl-num xl-w-smv" @keydown="handleExcelGridKeydown($event, rIdx, 4)" />
                   </td>
                   <td class="xl-cell">
-                    <input
-                      v-model.number="row.operators"
-                      type="number"
-                      inputmode="numeric"
-                      min="0"
-                      class="xl-input xl-num xl-w-op"
-                      @keydown="handleExcelGridKeydown($event, rIdx, 5)"
-                    />
+                    <input v-model.number="row.operators" type="number" inputmode="numeric" min="0"
+                      class="xl-input xl-num xl-w-op" @keydown="handleExcelGridKeydown($event, rIdx, 5)" />
                   </td>
                   <td class="xl-cell">
-                    <input
-                      v-model.number="row.helpers"
-                      type="number"
-                      inputmode="numeric"
-                      min="0"
-                      class="xl-input xl-num xl-w-hlp"
-                      @keydown="handleExcelGridKeydown($event, rIdx, 6)"
-                    />
+                    <input v-model.number="row.helpers" type="number" inputmode="numeric" min="0"
+                      class="xl-input xl-num xl-w-hlp" @keydown="handleExcelGridKeydown($event, rIdx, 6)" />
                   </td>
                   <td class="xl-cell">
-                    <input
-                      v-model.number="row.targetEfficiency"
-                      type="number"
-                      inputmode="decimal"
-                      min="1"
-                      max="100"
-                      step="0.5"
-                      class="xl-input xl-num xl-w-eff"
-                      @keydown="handleExcelGridKeydown($event, rIdx, 7)"
-                    />
+                    <input v-model.number="row.targetEfficiency" type="number" inputmode="decimal" min="1" max="100"
+                      step="0.5" class="xl-input xl-num xl-w-eff" @keydown="handleExcelGridKeydown($event, rIdx, 7)" />
                   </td>
                   <td class="xl-cell">
-                    <input
-                      v-model.number="row.dailyTarget"
-                      type="number"
-                      inputmode="numeric"
-                      min="0"
-                      step="50"
-                      class="xl-input xl-num xl-w-target"
-                      @keydown="handleExcelGridKeydown($event, rIdx, 8)"
-                    />
+                    <input v-model.number="row.dailyTarget" type="number" inputmode="numeric" min="0" step="50"
+                      class="xl-input xl-num xl-w-target" @keydown="handleExcelGridKeydown($event, rIdx, 8)" />
                   </td>
                 </tr>
               </tbody>
@@ -2921,11 +2948,9 @@ onUnmounted(() => {
               Unit: <strong>{{ popupDraft.unit }}</strong> · Rows Entered:
               <strong>{{ popupTotals.totalLines }}</strong> · Avg Target Eff:
               <strong>{{ popupTotals.avgTargetEff }}%</strong> · Manpower:
-              <strong
-                >{{ popupTotals.operators }} Op / {{ popupTotals.helpers }} Hlp ({{
-                  popupTotals.manpower
-                }})</strong
-              >
+              <strong>{{ popupTotals.operators }} Op / {{ popupTotals.helpers }} Hlp ({{
+                popupTotals.manpower
+              }})</strong>
             </span>
             <span>
               Total Target: <strong>{{ popupTotals.dailyTarget.toLocaleString() }} pcs</strong>
@@ -2943,25 +2968,18 @@ onUnmounted(() => {
     </div>
 
     <!-- Step-by-Step QR Entry Popup Modal -->
-    <div
-      v-if="isQrModalOpen"
-      class="modal-backdrop"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="qr-entry-popup-title"
-      @click.self="closeQrEntryPopup"
-    >
+    <div v-if="isQrModalOpen" class="modal-backdrop" role="dialog" aria-modal="true"
+      aria-labelledby="qr-entry-popup-title" @click.self="closeQrEntryPopup">
       <div class="modal-card qr-modal-card">
         <div class="modal-head">
           <div>
             <span class="modal-badge qr-modal-badge">QR ENTRY</span>
+            <span class="xl-sheet-tab">
+              Slot {{ qrEntryOut.hourIndex + 1 }}: {{ BASE_HOURS[qrEntryOut.hourIndex]?.section ||
+                shiftConfig.Shift_Start_time }}
+            </span>
           </div>
-          <button
-            type="button"
-            class="modal-close-btn"
-            aria-label="Close QR popup"
-            @click="closeQrEntryPopup"
-          >
+          <button type="button" class="modal-close-btn" aria-label="Close QR popup" @click="closeQrEntryPopup">
             ✕
           </button>
         </div>
@@ -2972,12 +2990,8 @@ onUnmounted(() => {
           </div>
 
           <div class="qr-option-select-row">
-            <select
-              :value="selectedQrOption"
-              aria-label="QR Code Option"
-              class="form-select qr-option-dropdown"
-              @change="onQrOptionDropdownChange($event.target.value)"
-            >
+            <select :value="selectedQrOption" aria-label="QR Code Option" class="form-select qr-option-dropdown"
+              @change="onQrOptionDropdownChange($event.target.value)">
               <option value="">-- Select QR Code Option --</option>
               <option v-for="opt in QR_OPTIONS" :key="opt.key" :value="opt.key">
                 {{ opt.label }} ({{ opt.badge }})
@@ -2999,55 +3013,24 @@ onUnmounted(() => {
           <div class="qr-single-field-row">
             <label v-if="selectedQrOption === 'FIRST_MC'" class="field-group qr-single-field">
               <span>Output Entry</span>
-              <input
-                v-model.number="qrEntryOut.qty"
-                type="number"
-                inputmode="numeric"
-                pattern="[0-9]*"
-                min="1"
-                placeholder="Enter 1st M/C pcs"
-                class="form-input"
-                required
-                @input="handleOutputEntryChange"
-              />
+              <input v-model.number="qrEntryOut.qty" type="number" inputmode="numeric" pattern="[0-9]*" min="1"
+                placeholder="Enter 1st M/C pcs" class="form-input" required @input="handleOutputEntryChange" />
             </label>
 
             <label v-else-if="selectedQrOption === 'LAST_MC'" class="field-group qr-single-field">
               <span>Output Entry (Last M/C pcs)</span>
-              <input
-                v-model.number="qrEntryOut.qty"
-                type="number"
-                inputmode="numeric"
-                pattern="[0-9]*"
-                min="1"
-                placeholder="Enter Last M/C pcs"
-                class="form-input"
-                required
-                @input="handleOutputEntryChange"
-              />
+              <input v-model.number="qrEntryOut.qty" type="number" inputmode="numeric" pattern="[0-9]*" min="1"
+                placeholder="Enter Last M/C pcs" class="form-input" required @input="handleOutputEntryChange" />
             </label>
 
             <label v-else-if="selectedQrOption === 'QC_PASS'" class="field-group qr-single-field">
               <span>Output Entry (QC Pass pcs)</span>
-              <input
-                v-model.number="qrEntryOut.qcPass"
-                type="number"
-                inputmode="numeric"
-                pattern="[0-9]*"
-                min="1"
-                placeholder="Enter QC Pass pcs"
-                class="form-input"
-                required
-                @input="handleOutputEntryChange"
-              />
+              <input v-model.number="qrEntryOut.qcPass" type="number" inputmode="numeric" pattern="[0-9]*" min="1"
+                placeholder="Enter QC Pass pcs" class="form-input" required @input="handleOutputEntryChange" />
             </label>
 
-            <button
-              type="button"
-              class="btn btn-primary btn-sm qr-action-btn"
-              :disabled="!hasValidOutputEntry"
-              @click="openScanAfterOutput"
-            >
+            <button type="button" class="btn btn-primary btn-sm qr-action-btn" :disabled="!hasValidOutputEntry"
+              @click="openScanAfterOutput">
               Scan QR →
             </button>
           </div>
@@ -3062,20 +3045,12 @@ onUnmounted(() => {
           </div>
 
           <div class="qr-scan-row">
-            <input
-              ref="qrScannerInputRef"
-              v-model="qrScanInput"
-              type="text"
-              class="form-input"
+            <input ref="qrScannerInputRef" v-model="qrScanInput" type="text" class="form-input"
               :placeholder="`Scan ${activeOptionMeta?.label} QR (e.g. QR|L04|BUNDLE-210)`"
-              @keydown.enter.prevent="confirmQrScan()"
-            />
+              @keydown.enter.prevent="confirmQrScan()" />
             <div class="qr-scan-btn-group">
-              <button
-                type="button"
-                class="btn btn-qr btn-sm"
-                @click="isCameraActive ? stopQrCamera() : startQrCamera()"
-              >
+              <button type="button" class="btn btn-qr btn-sm"
+                @click="isCameraActive ? stopQrCamera() : startQrCamera()">
                 {{ isCameraActive ? 'Stop Camera' : 'Open Camera' }}
               </button>
               <button type="button" class="btn btn-primary btn-sm" @click="confirmQrScan()">
@@ -3089,18 +3064,10 @@ onUnmounted(() => {
 
           <div class="qr-quick-samples">
             <span class="preset-label">Quick Sample Scan:</span>
-            <button
-              type="button"
-              class="preset-chip"
-              @click="confirmQrScan('QR|L04|BUNDLE-210')"
-            >
+            <button type="button" class="preset-chip" @click="confirmQrScan('QR|L04|BUNDLE-210')">
               Scan L04
             </button>
-            <button
-              type="button"
-              class="preset-chip"
-              @click="confirmQrScan('QR|L02|BUNDLE-118')"
-            >
+            <button type="button" class="preset-chip" @click="confirmQrScan('QR|L02|BUNDLE-118')">
               Scan L02
             </button>
           </div>
@@ -3108,7 +3075,8 @@ onUnmounted(() => {
           <div v-if="isQrScanned && scannedAtTime" class="modal-summary-bar">
             <span>
               QR: <strong>{{ scannedQrCode }}</strong> · Line:
-              <strong>{{ scannedLineLabel || qrTargetLine.lineName }}</strong>
+              <strong>{{ scannedLineLabel || qrTargetLine.lineName }}</strong> · Slot:
+              <strong>{{ BASE_HOURS[qrEntryOut.hourIndex]?.section }}</strong>
             </span>
             <span>
               Scan Time: <strong>{{ scannedAtTime }}</strong>
@@ -3124,7 +3092,7 @@ onUnmounted(() => {
           <span class="preset-label">Recent Logs:</span>
           <div class="qr-history-pills">
             <span v-for="item in qrScanHistory.slice(0, 3)" :key="item.id" class="history-pill">
-              {{ item.optionLabel }} · {{ item.lineName }} {{ item.summary }} (Scan: {{ item.time }})
+              {{ item.optionLabel }} · {{ item.lineName }} ({{ item.slotLabel }}) {{ item.summary }} · {{ item.time }}
             </span>
           </div>
         </div>
@@ -3164,10 +3132,7 @@ onUnmounted(() => {
 
       <div class="kpi-box kpi-qc-var">
         <span class="kpi-title">Last → QC Variance</span>
-        <div
-          class="kpi-metric"
-          :class="totalLastToQcVariance > 0 ? 'tone-amber' : 'tone-green'"
-        >
+        <div class="kpi-metric" :class="totalLastToQcVariance > 0 ? 'tone-amber' : 'tone-green'">
           {{ totalLastToQcVariance.toLocaleString() }}
           <span class="kpi-denom">pcs</span>
         </div>
@@ -3180,9 +3145,7 @@ onUnmounted(() => {
           {{ totalNptMinutes.toLocaleString() }}
           <span class="kpi-denom">min</span>
         </div>
-        <span class="kpi-hint"
-          >Est. Loss: {{ formatPcsValue(totalNptLossPcs) }} pcs · Hover problems</span
-        >
+        <span class="kpi-hint">Est. Loss: {{ formatPcsValue(totalNptLossPcs) }} pcs · Hover problems</span>
 
         <div class="npt-popover" role="tooltip">
           <div class="npt-popover-head">
@@ -3190,11 +3153,7 @@ onUnmounted(() => {
             <strong>{{ totalNptMinutes.toLocaleString() }} min</strong>
           </div>
           <div v-if="overallNptProblemsSummary.length" class="npt-popover-list">
-            <div
-              v-for="prob in overallNptProblemsSummary"
-              :key="prob.problem"
-              class="npt-popover-row"
-            >
+            <div v-for="prob in overallNptProblemsSummary" :key="prob.problem" class="npt-popover-row">
               <span class="npt-prob-name">{{ prob.problem }}</span>
               <span class="npt-prob-mins">{{ prob.minutes.toLocaleString() }} min</span>
             </div>
@@ -3220,10 +3179,7 @@ onUnmounted(() => {
 
       <div class="kpi-box">
         <span class="kpi-title">Line Efficiency</span>
-        <div
-          class="kpi-metric"
-          :class="Number(overallEfficiency) >= targetEfficiency ? 'tone-green' : 'tone-amber'"
-        >
+        <div class="kpi-metric" :class="Number(overallEfficiency) >= targetEfficiency ? 'tone-green' : 'tone-amber'">
           {{ overallEfficiency }}%
         </div>
         <span class="kpi-hint">
@@ -3269,11 +3225,7 @@ onUnmounted(() => {
           <tbody>
             <template v-for="item in groupedTableDisplayRows" :key="item.key">
               <tr v-if="item.rowType === 'line'" :class="{ 'inactive-line-row': !item.line.isActive }">
-                <td
-                  v-if="item.showMergedUnitCell"
-                  :rowspan="item.unitRowspan"
-                  class="merged-unit-cell"
-                >
+                <td v-if="item.showMergedUnitCell" :rowspan="item.unitRowspan" class="merged-unit-cell">
                   <div class="merged-unit-sticky">
                     <span class="unit-badge unit-badge-sm">{{ item.line.unit }}</span>
                     <span class="merged-unit-sub">· {{ item.unitRowspan - 1 }}L</span>
@@ -3304,10 +3256,7 @@ onUnmounted(() => {
                   </div>
                 </td>
                 <td class="npt-hover-wrap">
-                  <span
-                    class="gap-badge"
-                    :class="item.line.isNptAlert ? 'gap-npt-warn' : 'gap-npt'"
-                  >
+                  <span class="gap-badge" :class="item.line.isNptAlert ? 'gap-npt-warn' : 'gap-npt'">
                     {{ item.line.totalNptMin }}m ({{ formatPcsValue(item.line.nptLossPcs) }} pcs)
                   </span>
                   <div class="muted-sm">{{ item.line.nptPctStr }}% NPT</div>
@@ -3318,11 +3267,7 @@ onUnmounted(() => {
                       <strong>{{ item.line.totalNptMin }} min</strong>
                     </div>
                     <div v-if="item.line.nptProblemsSummary.length" class="npt-popover-list">
-                      <div
-                        v-for="prob in item.line.nptProblemsSummary"
-                        :key="prob.problem"
-                        class="npt-popover-row"
-                      >
+                      <div v-for="prob in item.line.nptProblemsSummary" :key="prob.problem" class="npt-popover-row">
                         <span class="npt-prob-name">{{ prob.problem }}</span>
                         <span class="npt-prob-mins">{{ prob.minutes }} min</span>
                       </div>
@@ -3338,17 +3283,12 @@ onUnmounted(() => {
                 <td>
                   <div class="progress-meta">
                     <strong>{{ item.line.lastMachineTotal.toLocaleString() }}</strong>
-                    <span
-                      >/ {{ item.line.dailyTarget.toLocaleString() }} ({{
-                        item.line.completionPct
-                      }}%)</span
-                    >
+                    <span>/ {{ item.line.dailyTarget.toLocaleString() }} ({{
+                      item.line.completionPct
+                    }}%)</span>
                   </div>
                   <div class="progress-track">
-                    <div
-                      class="progress-fill"
-                      :style="{ width: `${item.line.completionPct}%` }"
-                    ></div>
+                    <div class="progress-fill" :style="{ width: `${item.line.completionPct}%` }"></div>
                   </div>
                 </td>
                 <td>
@@ -3356,10 +3296,7 @@ onUnmounted(() => {
                   <div class="muted-sm">{{ item.line.qcPassRateStr }}% pass</div>
                 </td>
                 <td>
-                  <span
-                    class="gap-badge"
-                    :class="item.line.lastToQcVariance > 0 ? 'gap-qc-var' : 'gap-normal'"
-                  >
+                  <span class="gap-badge" :class="item.line.lastToQcVariance > 0 ? 'gap-qc-var' : 'gap-normal'">
                     {{ item.line.lastToQcVariance.toLocaleString() }} pcs ({{
                       item.line.qcLossRateStr
                     }}%)
@@ -3372,29 +3309,17 @@ onUnmounted(() => {
                 </td>
                 <td class="num-col">{{ item.line.targetEfficiency }}%</td>
                 <td>
-                  <span
-                    class="eff-pill"
-                    :class="
-                      item.line.efficiency >= item.line.targetEfficiency ? 'eff-ok' : 'eff-warn'
-                    "
-                  >
+                  <span class="eff-pill" :class="item.line.efficiency >= item.line.targetEfficiency ? 'eff-ok' : 'eff-warn'
+                    ">
                     {{ item.line.efficiencyStr }}%
                   </span>
                 </td>
                 <td>
                   <div class="row-actions">
-                    <button
-                      type="button"
-                      class="act-btn act-edit"
-                      @click="openLinePopup(item.line.id)"
-                    >
+                    <button type="button" class="act-btn act-edit" @click="openLinePopup(item.line.id)">
                       Edit
                     </button>
-                    <button
-                      type="button"
-                      class="act-btn act-inspect"
-                      @click="selectedLineId = item.line.id"
-                    >
+                    <button type="button" class="act-btn act-inspect" @click="selectedLineId = item.line.id">
                       Inspect
                     </button>
                   </div>
@@ -3421,10 +3346,7 @@ onUnmounted(() => {
                   <div class="muted-sm">Line Target Sum</div>
                 </td>
                 <td class="npt-hover-wrap">
-                  <span
-                    class="gap-badge"
-                    :class="item.subtotal.isNptAlert ? 'gap-npt-warn' : 'gap-npt'"
-                  >
+                  <span class="gap-badge" :class="item.subtotal.isNptAlert ? 'gap-npt-warn' : 'gap-npt'">
                     {{ item.subtotal.totalNptMin.toLocaleString() }}m ({{
                       formatPcsValue(item.subtotal.nptLossPcs)
                     }}
@@ -3438,11 +3360,7 @@ onUnmounted(() => {
                       <strong>{{ item.subtotal.totalNptMin.toLocaleString() }} min</strong>
                     </div>
                     <div v-if="item.subtotal.nptProblemsSummary.length" class="npt-popover-list">
-                      <div
-                        v-for="prob in item.subtotal.nptProblemsSummary"
-                        :key="prob.problem"
-                        class="npt-popover-row"
-                      >
+                      <div v-for="prob in item.subtotal.nptProblemsSummary" :key="prob.problem" class="npt-popover-row">
                         <span class="npt-prob-name">{{ prob.problem }}</span>
                         <span class="npt-prob-mins">{{ prob.minutes }} min</span>
                       </div>
@@ -3460,17 +3378,13 @@ onUnmounted(() => {
                 <td>
                   <div class="progress-meta">
                     <strong>{{ item.subtotal.lastMachineTotal.toLocaleString() }}</strong>
-                    <span
-                      >/ {{ item.subtotal.dailyTarget.toLocaleString() }} ({{
-                        item.subtotal.completionPct
-                      }}%)</span
-                    >
+                    <span>/ {{ item.subtotal.dailyTarget.toLocaleString() }} ({{
+                      item.subtotal.completionPct
+                    }}%)</span>
                   </div>
                   <div class="progress-track">
-                    <div
-                      class="progress-fill progress-fill-sub"
-                      :style="{ width: `${item.subtotal.completionPct}%` }"
-                    ></div>
+                    <div class="progress-fill progress-fill-sub" :style="{ width: `${item.subtotal.completionPct}%` }">
+                    </div>
                   </div>
                 </td>
                 <td>
@@ -3480,20 +3394,14 @@ onUnmounted(() => {
                   <div class="muted-sm">{{ item.subtotal.qcPassRateStr }}% pass</div>
                 </td>
                 <td>
-                  <span
-                    class="gap-badge"
-                    :class="item.subtotal.lastToQcVariance > 0 ? 'gap-qc-var' : 'gap-normal'"
-                  >
+                  <span class="gap-badge" :class="item.subtotal.lastToQcVariance > 0 ? 'gap-qc-var' : 'gap-normal'">
                     {{ item.subtotal.lastToQcVariance.toLocaleString() }} pcs ({{
                       item.subtotal.qcLossRateStr
                     }}%)
                   </span>
                 </td>
                 <td>
-                  <span
-                    class="gap-badge"
-                    :class="item.subtotal.isGapAlert ? 'gap-warn' : 'gap-normal'"
-                  >
+                  <span class="gap-badge" :class="item.subtotal.isGapAlert ? 'gap-warn' : 'gap-normal'">
                     {{ item.subtotal.machineGap.toLocaleString() }} pcs ({{
                       item.subtotal.gapMinutes.toLocaleString()
                     }}m)
@@ -3501,23 +3409,15 @@ onUnmounted(() => {
                 </td>
                 <td class="num-col">Avg {{ item.subtotal.targetEfficiencyStr }}%</td>
                 <td>
-                  <span
-                    class="eff-pill"
-                    :class="
-                      item.subtotal.efficiency >= item.subtotal.targetEfficiency
-                        ? 'eff-ok'
-                        : 'eff-warn'
-                    "
-                  >
+                  <span class="eff-pill" :class="item.subtotal.efficiency >= item.subtotal.targetEfficiency
+                    ? 'eff-ok'
+                    : 'eff-warn'
+                    ">
                     {{ item.subtotal.efficiencyStr }}%
                   </span>
                 </td>
                 <td>
-                  <button
-                    type="button"
-                    class="act-btn act-unit-filter"
-                    @click="selectUnit(item.subtotal.unit)"
-                  >
+                  <button type="button" class="act-btn act-unit-filter" @click="selectUnit(item.subtotal.unit)">
                     Filter {{ item.subtotal.unit }}
                   </button>
                 </td>
@@ -3531,18 +3431,13 @@ onUnmounted(() => {
                     ? `${UNIT_LINE_SHEET} is blank — no lines on board yet.`
                     : 'No lines match your current filter.'
                 }}
-                <button
-                  v-if="linesData.length > 0"
-                  type="button"
-                  class="act-btn act-inspect"
-                  style="margin-left: 8px"
+                <button v-if="linesData.length > 0" type="button" class="act-btn act-inspect" style="margin-left: 8px"
                   @click="
                     searchQuery = '';
-                    onlyGapAlerts = false;
-                    onlyActiveLines = false;
-                    selectedUnit = 'ALL';
-                  "
-                >
+                  onlyGapAlerts = false;
+                  onlyActiveLines = false;
+                  selectedUnit = 'ALL';
+                  ">
                   Clear Filters
                 </button>
               </td>
@@ -3584,11 +3479,7 @@ onUnmounted(() => {
               <strong>{{ currentLineMetrics.totalNptMin }} min</strong>
             </div>
             <div v-if="currentLineMetrics.nptProblemsSummary.length" class="npt-popover-list">
-              <div
-                v-for="prob in currentLineMetrics.nptProblemsSummary"
-                :key="prob.problem"
-                class="npt-popover-row"
-              >
+              <div v-for="prob in currentLineMetrics.nptProblemsSummary" :key="prob.problem" class="npt-popover-row">
                 <span class="npt-prob-name">{{ prob.problem }}</span>
                 <span class="npt-prob-mins">{{ prob.minutes }} min</span>
               </div>
@@ -3626,18 +3517,10 @@ onUnmounted(() => {
           </strong>
         </div>
         <div class="row-actions">
-          <button
-            type="button"
-            class="act-btn act-edit"
-            @click="openLinePopup(currentLine.id)"
-          >
+          <button type="button" class="act-btn act-edit" @click="openLinePopup(currentLine.id)">
             Edit {{ currentLineMetrics.unit }}
           </button>
-          <button
-            type="button"
-            class="act-btn"
-            @click="addFirstMachinePieces(currentLine.id, 10)"
-          >
+          <button type="button" class="act-btn" @click="addFirstMachinePieces(currentLine.id, 10)">
             +10 1st M/C
           </button>
           <button type="button" class="act-btn act-inspect" @click="selectedLineId = 'ALL'">
@@ -3667,54 +3550,28 @@ onUnmounted(() => {
             </tr>
           </thead>
           <tbody>
-            <tr
-              v-for="row in computedRows"
-              :key="row.hour"
-              :class="{ 'active-hour-row': row.status === 'active' }"
-            >
+            <tr v-for="row in computedRows" :key="row.hour" :class="{ 'active-hour-row': row.status === 'active' }">
               <td>
                 <strong>{{ row.hour }}</strong>
               </td>
               <td class="num-col">{{ row.target }}</td>
               <td>
-                <input
-                  v-model.number="currentLine.hourlyRows[row.index].actual"
-                  type="number"
-                  inputmode="numeric"
-                  pattern="[0-9]*"
-                  min="0"
-                  class="counter-input"
-                  @change="onHourlyActualChange(currentLine, row.index)"
-                />
+                <input v-model.number="currentLine.hourlyRows[row.index].actual" type="number" inputmode="numeric"
+                  pattern="[0-9]*" min="0" class="counter-input"
+                  @change="onHourlyActualChange(currentLine, row.index)" />
               </td>
               <td>
-                <input
-                  v-model.number="currentLine.hourlyRows[row.index].qcPass"
-                  type="number"
-                  inputmode="numeric"
-                  pattern="[0-9]*"
-                  min="0"
-                  :max="row.actual"
-                  class="counter-input counter-input-qc"
-                  @change="onHourlyQcPassChange(currentLine, row.index)"
-                />
+                <input v-model.number="currentLine.hourlyRows[row.index].qcPass" type="number" inputmode="numeric"
+                  pattern="[0-9]*" min="0" :max="row.actual" class="counter-input counter-input-qc"
+                  @change="onHourlyQcPassChange(currentLine, row.index)" />
               </td>
               <td>
-                <input
-                  v-model.number="currentLine.hourlyRows[row.index].downtimeMin"
-                  type="number"
-                  inputmode="numeric"
-                  pattern="[0-9]*"
-                  min="0"
-                  class="counter-input counter-input-npt"
-                  @change="onHourlyDowntimeChange(currentLine, row.index)"
-                />
+                <input v-model.number="currentLine.hourlyRows[row.index].downtimeMin" type="number" inputmode="numeric"
+                  pattern="[0-9]*" min="0" class="counter-input counter-input-npt"
+                  @change="onHourlyDowntimeChange(currentLine, row.index)" />
               </td>
               <td>
-                <span
-                  class="gap-badge"
-                  :class="row.hourLastToQcVariance > 0 ? 'gap-qc-var' : 'gap-normal'"
-                >
+                <span class="gap-badge" :class="row.hourLastToQcVariance > 0 ? 'gap-qc-var' : 'gap-normal'">
                   {{ row.hourLastToQcVariance }} pcs
                 </span>
               </td>
@@ -3727,10 +3584,7 @@ onUnmounted(() => {
               <td class="num-col">{{ row.cumulativeActual }}</td>
               <td class="num-col tone-green">{{ row.cumulativeQcPass }}</td>
               <td>
-                <span
-                  class="eff-pill"
-                  :class="row.efficiency >= currentLine.targetEfficiency ? 'eff-ok' : 'eff-warn'"
-                >
+                <span class="eff-pill" :class="row.efficiency >= currentLine.targetEfficiency ? 'eff-ok' : 'eff-warn'">
                   {{ row.efficiency }}%
                 </span>
               </td>
@@ -3742,25 +3596,13 @@ onUnmounted(() => {
               </td>
               <td>
                 <div class="row-actions">
-                  <button
-                    type="button"
-                    class="act-btn"
-                    @click="addPieces(currentLine.id, row.index, 5)"
-                  >
+                  <button type="button" class="act-btn" @click="addPieces(currentLine.id, row.index, 5)">
                     +5
                   </button>
-                  <button
-                    type="button"
-                    class="act-btn"
-                    @click="addPieces(currentLine.id, row.index, 10)"
-                  >
+                  <button type="button" class="act-btn" @click="addPieces(currentLine.id, row.index, 10)">
                     +10
                   </button>
-                  <button
-                    type="button"
-                    class="act-btn"
-                    @click="addPieces(currentLine.id, row.index, -5)"
-                  >
+                  <button type="button" class="act-btn" @click="addPieces(currentLine.id, row.index, -5)">
                     -5
                   </button>
                 </div>
@@ -3817,7 +3659,7 @@ onUnmounted(() => {
   flex: 1 1 320px;
 }
 
-.board-shell.mode-compact .top-selector-group > * {
+.board-shell.mode-compact .top-selector-group>* {
   flex: 1 1 auto;
 }
 
@@ -3901,7 +3743,7 @@ onUnmounted(() => {
 }
 
 .shift-modal-card {
-  max-width: min(760px, 96vw);
+  max-width: min(860px, 96vw);
 }
 
 .qr-modal-card {
@@ -3984,26 +3826,19 @@ onUnmounted(() => {
   min-height: 0;
 }
 
-.shift-preset-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-
-.preset-chip-active {
-  background: rgba(56, 189, 248, 0.24) !important;
-  color: #bae6fd !important;
-  border-color: rgba(56, 189, 248, 0.55) !important;
-}
-
 .shift-time-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 
-@media (max-width: 640px) {
+@media (max-width: 760px) {
+  .shift-time-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
   .shift-time-grid {
     grid-template-columns: 1fr;
   }
@@ -4060,6 +3895,7 @@ onUnmounted(() => {
   color: #93c5fd;
   font-weight: 600;
   text-align: right;
+  white-space: nowrap;
 }
 
 .popup-unit-head-bar {
@@ -4344,6 +4180,7 @@ onUnmounted(() => {
 }
 
 @media (max-width: 640px) {
+
   .form-input,
   .form-select {
     min-height: 42px;
@@ -4511,8 +4348,8 @@ onUnmounted(() => {
   width: 100%;
 }
 
-.board-shell.mode-compact .header-actions > .btn,
-.board-shell.mode-compact .filter-controls > .filter-toggle {
+.board-shell.mode-compact .header-actions>.btn,
+.board-shell.mode-compact .filter-controls>.filter-toggle {
   flex: 1 1 calc(50% - 4px);
   min-height: 40px;
   text-align: center;
@@ -5014,23 +4851,19 @@ onUnmounted(() => {
 }
 
 .unit-subtotal-row {
-  background: linear-gradient(
-    90deg,
-    rgba(37, 99, 235, 0.18) 0%,
-    rgba(30, 41, 59, 0.92) 45%,
-    rgba(23, 34, 56, 0.95) 100%
-  );
+  background: linear-gradient(90deg,
+      rgba(37, 99, 235, 0.18) 0%,
+      rgba(30, 41, 59, 0.92) 45%,
+      rgba(23, 34, 56, 0.95) 100%);
   border-top: 1px solid rgba(96, 165, 250, 0.32);
   border-bottom: 2px solid rgba(148, 163, 184, 0.24);
 }
 
 .unit-subtotal-row:hover {
-  background: linear-gradient(
-    90deg,
-    rgba(37, 99, 235, 0.24) 0%,
-    rgba(30, 41, 59, 0.96) 45%,
-    rgba(23, 34, 56, 0.98) 100%
-  );
+  background: linear-gradient(90deg,
+      rgba(37, 99, 235, 0.24) 0%,
+      rgba(30, 41, 59, 0.96) 45%,
+      rgba(23, 34, 56, 0.98) 100%);
 }
 
 .subtotal-label {
