@@ -3,11 +3,11 @@ import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { Html5Qrcode } from 'html5-qrcode'
 import { dbAPI as Unit_line_API } from '@/services/unit_line_api.js'
 import { dbAPI as item_API } from '@/services/item_api.js'
+import { dbAPI } from '@/services/live-board/shift_api.js'
 
-const BACKEND_URL =
-  'https://script.google.com/macros/s/AKfycbz9QfOx3G6ghMSuA9rtjEZLUPL7qJhn8laR2e2hFIzPgFnE7ch4Jb3K9tevP6wiWmcT/exec'
-
+const BACKEND_URL = ''
 const UNIT_LINE_SHEET = 'Unit_line_No'
+const SHIFT_SHEET_NAME = 'Shift_time'
 const SHIFT_STORAGE_KEY = 'mis_live_board_shift_config_v3'
 const SHIFT_RULES_STORAGE_KEY = 'mis_live_board_shift_rules_v1'
 const LINES_PER_UNIT = 8
@@ -34,8 +34,7 @@ const SHIFT_PRESETS = [
 const SHIFT_SECTION_OPTIONS = [
   'KNITTING',
   'DYEING',
-  'GARMENTS',
-  
+  'GARMENTS'
 ]
 
 const DEFAULT_SLOT_TEMPLATES = [
@@ -275,6 +274,7 @@ const initialCreatedAt = new Date().toISOString()
 
 const submissionDate = ref(initialDate)
 const shiftRules = ref([])
+const isSavingShift = ref(false)
 
 const shiftConfig = ref({
   id: initialId,
@@ -514,25 +514,25 @@ function openShiftControlModal() {
   const initialSlots =
     existingDateSlots.length > 0
       ? [
-        ...existingDateSlots.map((r, idx) => ({
-          id: r.id || `${cleanId}-${idx + 1}`,
-          section: r.section || '',
-          hour: r.hour || r.section || '',
-          Shift: r.Shift || cleanShift,
-          Shift_Start_time: r.Shift_Start_time || cleanStart,
-          submissionDate: activeDateKey,
-          date: activeDateKey,
-          create_at: r.create_at || createdAtIso
-        })),
-        createEmptyShiftRow(
-          existingDateSlots.length,
-          cleanId,
-          cleanShift,
-          cleanStart,
-          new Date().toISOString(),
-          activeDateKey
-        )
-      ]
+          ...existingDateSlots.map((r, idx) => ({
+            id: r.id || `${cleanId}-${idx + 1}`,
+            section: r.section || '',
+            hour: r.hour || r.section || '',
+            Shift: r.Shift || cleanShift,
+            Shift_Start_time: r.Shift_Start_time || cleanStart,
+            submissionDate: activeDateKey,
+            date: activeDateKey,
+            create_at: r.create_at || createdAtIso
+          })),
+          createEmptyShiftRow(
+            existingDateSlots.length,
+            cleanId,
+            cleanShift,
+            cleanStart,
+            new Date().toISOString(),
+            activeDateKey
+          )
+        ]
       : [createEmptyShiftRow(0, cleanId, cleanShift, cleanStart, createdAtIso, activeDateKey)]
 
   shiftDraft.value = {
@@ -616,6 +616,21 @@ function onShiftDropdownChange(sIdx, selectedLabel) {
   }
 }
 
+function removeShiftSlot(sIdx) {
+  const slots = shiftDraft.value.slots
+  if (!Array.isArray(slots)) return
+  slots.splice(sIdx, 1)
+  if (slots.length === 0) {
+    const baseId = shiftDraft.value.id || 'SHF-001'
+    const shiftName = shiftDraft.value.Shift || 'Shift A (Day)'
+    const startTime = shiftDraft.value.Shift_Start_time || '08:00'
+    const dateKey = toDateKey(submissionDate.value || shiftDraft.value.submissionDate)
+    slots.push(
+      createEmptyShiftRow(0, baseId, shiftName, startTime, new Date().toISOString(), dateKey)
+    )
+  }
+}
+
 function applyShiftConfigToLines(nextConfig, savedDateKey = toDateKey(submissionDate.value)) {
   const slots = nextConfig.slots || []
   const maxSlotIdx = Math.max(0, slots.length - 1)
@@ -682,19 +697,19 @@ function applyShiftConfigToLines(nextConfig, savedDateKey = toDateKey(submission
       const dhu = prev ? Math.max(0, Number(prev.dhu) || 0) : actual > 0 ? slot.dhu : 0
       const qcPass = prev
         ? Math.min(
-          actual,
-          Math.max(0, Math.round(Number(prev.qcPass) ?? calcHourQcPass(actual, dhu)))
-        )
+            actual,
+            Math.max(0, Math.round(Number(prev.qcPass) ?? calcHourQcPass(actual, dhu)))
+          )
         : calcHourQcPass(actual, dhu)
       const downtimeMin = prev ? Math.max(0, Number(prev.downtimeMin) || 0) : 0
       const nptProblems = prev
         ? normalizeNptProblems(
-          prev.nptProblems,
-          downtimeMin,
-          slot.problem || NPT_PROBLEM_TYPES[(lIdx + idx) % NPT_PROBLEM_TYPES.length],
-          lIdx,
-          idx
-        )
+            prev.nptProblems,
+            downtimeMin,
+            slot.problem || NPT_PROBLEM_TYPES[(lIdx + idx) % NPT_PROBLEM_TYPES.length],
+            lIdx,
+            idx
+          )
         : []
 
       return {
@@ -716,7 +731,70 @@ function applyShiftConfigToLines(nextConfig, savedDateKey = toDateKey(submission
   })
 }
 
-function saveShiftControl() {
+async function createShiftRecords(records = []) {
+  if (!Array.isArray(records) || records.length === 0) return []
+  isSavingShift.value = true
+  try {
+    const created = []
+    for (const slot of records) {
+      const payload = {
+        id: slot.id,
+        section: slot.section,
+        Shift: slot.Shift,
+        Shift_Start_time: slot.Shift_Start_time,
+        submissionDate: slot.submissionDate,
+        date: slot.date,
+        create_at: slot.create_at
+      }
+      const res = await dbAPI.createRecord(SHIFT_SHEET_NAME, payload)
+      created.push(res || payload)
+    }
+    return created
+  } finally {
+    isSavingShift.value = false
+  }
+}
+
+async function fetchShiftRulesFromApi({ silent = true } = {}) {
+  if (!dbAPI?.readRecords) return shiftRules.value
+  try {
+    const records = await dbAPI.readRecords(SHIFT_SHEET_NAME)
+    const list = Array.isArray(records) ? records : []
+    const valid = list.filter(
+      (r) => r && (String(r.section || '').trim() || String(r.Shift_Start_time || '').trim())
+    )
+    if (valid.length > 0) {
+      const merged = new Map(shiftRules.value.map((r) => [buildRuleSignature(r), r]))
+      valid.forEach((row, idx) => {
+        const dateKey = toDateKey(row.submissionDate || row.date || submissionDate.value)
+        const normalized = {
+          id: String(row.id || row.ID || `SHF-${idx + 1}`),
+          section: String(row.section || row.Section || '').trim(),
+          hour: String(row.section || row.Section || '').trim(),
+          Shift: String(row.Shift || row.shift || 'Shift A (Day)').trim(),
+          Shift_Start_time: String(row.Shift_Start_time || '08:00').trim(),
+          submissionDate: dateKey,
+          date: dateKey,
+          create_at: String(row.create_at || new Date().toISOString())
+        }
+        merged.set(buildRuleSignature(normalized), normalized)
+      })
+      shiftRules.value = Array.from(merged.values())
+      persistShiftConfig(shiftConfig.value)
+      if (!silent) {
+        notify(`Loaded ${valid.length} shift rule(s) from ${SHIFT_SHEET_NAME}`)
+      }
+    }
+    return shiftRules.value
+  } catch (err) {
+    if (!silent) {
+      notify(`Shift fetch failed: ${err.message}`)
+    }
+    return shiftRules.value
+  }
+}
+
+async function saveShiftControl() {
   const savedDateKey = toDateKey(submissionDate.value || shiftDraft.value.submissionDate || new Date())
   submissionDate.value = savedDateKey
 
@@ -724,6 +802,11 @@ function saveShiftControl() {
   const filledSlots = rawSlots.filter(
     (slot) => String(slot.section || slot.hour || '').trim() !== ''
   )
+
+  if (filledSlots.length === 0) {
+    notify('Please select at least one section before saving')
+    return
+  }
 
   const firstSlotStartRaw = String(
     filledSlots[0]?.Shift_Start_time ||
@@ -769,27 +852,22 @@ function saveShiftControl() {
   })
 
   // Store rules keyed by submissionDate + section + Shift + Shift_Start_time
-  if (normalizedSlots.length > 0) {
-    const nextRuleMap = new Map(shiftRules.value.map((r) => [buildRuleSignature(r), r]))
-    normalizedSlots.forEach((slot) => {
-      nextRuleMap.set(buildRuleSignature(slot), { ...slot })
-    })
-    shiftRules.value = Array.from(nextRuleMap.values())
-  }
+  const nextRuleMap = new Map(shiftRules.value.map((r) => [buildRuleSignature(r), r]))
+  normalizedSlots.forEach((slot) => {
+    nextRuleMap.set(buildRuleSignature(slot), { ...slot })
+  })
+  shiftRules.value = Array.from(nextRuleMap.values())
 
-  const nextSlots =
-    normalizedSlots.length > 0
-      ? buildShiftSlotsFromStartPlus80Min(
-        cleanStartHHMM,
-        hrs,
-        cleanShift,
-        recordId,
-        createdAtIso,
-        normalizedSlots,
-        firstSlotStartRaw,
-        savedDateKey
-      )
-      : shiftConfig.value.slots
+  const nextSlots = buildShiftSlotsFromStartPlus80Min(
+    cleanStartHHMM,
+    hrs,
+    cleanShift,
+    recordId,
+    createdAtIso,
+    normalizedSlots,
+    firstSlotStartRaw,
+    savedDateKey
+  )
 
   const nextConfig = {
     ...shiftConfig.value,
@@ -812,28 +890,16 @@ function saveShiftControl() {
   persistShiftConfig(nextConfig)
   applyShiftConfigToLines(nextConfig, savedDateKey)
 
-  isShiftModalOpen.value = false
-  lastUpdated.value = new Date().toLocaleTimeString()
-  notify(
-    `Saved ${normalizedSlots.length} rule(s) for ${savedDateKey} · ${cleanShift} (${firstSlotStartRaw})`
-  )
-
-  sendToGasBackend('saveShiftConfig', {
-    submissionDate: savedDateKey,
-    date: savedDateKey,
-    shiftRules: JSON.parse(JSON.stringify(shiftRules.value)),
-    shiftRecords: normalizedSlots.map((slot) => ({
-      id: slot.id,
-      section: slot.section,
-      Shift: slot.Shift,
-      Shift_Start_time: slot.Shift_Start_time,
-      submissionDate: savedDateKey,
-      date: savedDateKey,
-      create_at: slot.create_at
-    })),
-    shiftConfig: JSON.parse(JSON.stringify(nextConfig)),
-    lines: JSON.parse(JSON.stringify(linesData.value))
-  })
+  try {
+    await createShiftRecords(normalizedSlots)
+    isShiftModalOpen.value = false
+    lastUpdated.value = new Date().toLocaleTimeString()
+    notify(
+      `Created ${normalizedSlots.length} shift record(s) in ${SHIFT_SHEET_NAME} (${savedDateKey})`
+    )
+  } catch (err) {
+    notify(`Saved locally · Sheet error: ${err.message}`)
+  }
 }
 
 const BUYERS = [
@@ -1001,21 +1067,21 @@ function normalizeLineRows(rawRows, lineIndex = 0) {
 
 function aggregateProblemsFromRows(hourlyRows) {
   const map = {}
-    ; (hourlyRows || []).forEach((r, idx) => {
-      const mins = Math.max(0, Number(r.downtimeMin) || 0)
-      if (mins <= 0) return
-      const items = normalizeNptProblems(
-        r.nptProblems,
-        mins,
-        NPT_PROBLEM_TYPES[idx % NPT_PROBLEM_TYPES.length],
-        0,
-        idx
-      )
-      items.forEach((entry) => {
-        const key = entry.problem || 'MACHINE PROBLEM'
-        map[key] = (map[key] || 0) + (Number(entry.minutes) || 0)
-      })
+  ;(hourlyRows || []).forEach((r, idx) => {
+    const mins = Math.max(0, Number(r.downtimeMin) || 0)
+    if (mins <= 0) return
+    const items = normalizeNptProblems(
+      r.nptProblems,
+      mins,
+      NPT_PROBLEM_TYPES[idx % NPT_PROBLEM_TYPES.length],
+      0,
+      idx
+    )
+    items.forEach((entry) => {
+      const key = entry.problem || 'MACHINE PROBLEM'
+      map[key] = (map[key] || 0) + (Number(entry.minutes) || 0)
     })
+  })
   return Object.entries(map)
     .map(([problem, minutes]) => ({ problem, minutes }))
     .sort((a, b) => b.minutes - a.minutes)
@@ -1024,7 +1090,7 @@ function aggregateProblemsFromRows(hourlyRows) {
 function mergeProblemSummaries(summaries) {
   const map = {}
   summaries.forEach((list) => {
-    ; (list || []).forEach((item) => {
+    ;(list || []).forEach((item) => {
       const key = item.problem || 'MACHINE PROBLEM'
       map[key] = (map[key] || 0) + (Number(item.minutes) || 0)
     })
@@ -1428,8 +1494,10 @@ async function sendToGasBackend(action, payload, { silent = false } = {}) {
 async function hydrateFromGasBackend() {
   await Promise.all([
     fetchUnitLinesFromApi({ silent: false }),
-    fetchItemsFromApi({ silent: true })
+    fetchItemsFromApi({ silent: true }),
+    fetchShiftRulesFromApi({ silent: true })
   ])
+  applyShiftConfigToLines(shiftConfig.value, submissionDate.value)
 }
 
 async function manualSyncBoardToGas() {
@@ -1729,8 +1797,8 @@ const popupTotals = computed(() => {
   const dailyTarget = rows.reduce((s, r) => s + (Number(r.dailyTarget) || 0), 0)
   const avgTargetEff = rows.length
     ? (
-      rows.reduce((s, r) => s + (Number(r.targetEfficiency) || 75), 0) / rows.length
-    ).toFixed(1)
+        rows.reduce((s, r) => s + (Number(r.targetEfficiency) || 75), 0) / rows.length
+      ).toFixed(1)
     : '75.0'
   return {
     totalLines: rows.length,
@@ -1744,6 +1812,9 @@ const popupTotals = computed(() => {
 
 function saveLinePopup() {
   const targetUnit = String(popupDraft.value.unit || '').trim() || 'Unit-1'
+  const targetDate = toDateKey(popupDraft.value.date || submissionDate.value)
+  submissionDate.value = targetDate
+
   const populatedRows = popupDraft.value.lines.filter(isRowPopulated)
   const updatedLines = []
   const slots = BASE_HOURS.value
@@ -1782,7 +1853,8 @@ function saveLinePopup() {
         section: '',
         Shift: shiftConfig.value.Shift,
         Shift_Start_time: shiftConfig.value.Shift_Start_time,
-        submissionDate: submissionDate.value,
+        submissionDate: targetDate,
+        date: targetDate,
         isActive: true,
         poNo: cleanPo,
         styleNo: cleanStyle,
@@ -1805,6 +1877,8 @@ function saveLinePopup() {
 
     line.unit = targetUnit
     line.lineName = cleanLineName
+    line.submissionDate = targetDate
+    line.date = targetDate
     line.isActive = true
     line.poNo = cleanPo
     line.styleNo = cleanStyle
@@ -1833,8 +1907,11 @@ function saveLinePopup() {
 
   lastUpdated.value = new Date().toLocaleTimeString()
   isPopupOpen.value = false
-  notify(`${targetUnit} (${updatedLines.length} lines) saved`)
-  sendToGasBackend('syncBoardSnapshot', { lines: updatedLines })
+  notify(`${targetUnit} (${updatedLines.length} lines · ${targetDate}) saved`)
+  sendToGasBackend('syncBoardSnapshot', {
+    submissionDate: targetDate,
+    lines: updatedLines
+  })
 }
 
 async function stopQrCamera() {
@@ -1910,7 +1987,7 @@ async function resetQrFlowState(keepOption = false) {
     qrEntryOut.value.qty = null
     qrEntryOut.value.qcPass = null
     qrEntryOut.value.station = meta?.defaultStation || ''
-    qrScanFeedback.value = `Enter ${meta?.label} output quantity, then click "Scan QR".`
+    qrScanFeedback.value = `Enter ${meta?.label} output quantity, then click "Scan QR →".`
   }
 }
 
@@ -1959,6 +2036,8 @@ async function onQrOptionDropdownChange(optionKey) {
   qrEntryOut.value.station = meta?.defaultStation || ''
   isOutputEntered.value = Boolean(optionKey)
   qrScanFeedback.value = optionKey
+    ? `Enter ${meta?.label} output quantity, then click "Scan QR →".`
+    : ''
 }
 
 function handleOutputEntryChange() {
@@ -2242,9 +2321,9 @@ function computeLineMetrics(line, index = 0) {
   const activeIdx = matchedRule
     ? findSlotIndexForScanTime(new Date(), formatMinutesToHHMM(ruleStartMin), ruleSlots)
     : Math.min(
-      Math.max(0, Number(line.activeHourIndex) || 0),
-      Math.max(0, hourlyRows.length - 1)
-    )
+        Math.max(0, Number(line.activeHourIndex) || 0),
+        Math.max(0, hourlyRows.length - 1)
+      )
 
   const totalActual = hourlyRows.reduce((sum, r) => sum + (Number(r.actual) || 0), 0)
   const totalQcPass = hourlyRows.reduce((sum, r) => {
@@ -2414,11 +2493,11 @@ function buildUnitSubtotalRow(unitName, unitLines) {
     : 0
   const targetEffAvg = lineCount
     ? Number(
-      (
-        activeUnitLines.reduce((s, l) => s + (Number(l.targetEfficiency) || 75), 0) /
-        lineCount
-      ).toFixed(1)
-    )
+        (
+          activeUnitLines.reduce((s, l) => s + (Number(l.targetEfficiency) || 75), 0) /
+          lineCount
+        ).toFixed(1)
+      )
     : 75
 
   return {
@@ -3001,18 +3080,27 @@ onUnmounted(() => {
     </header>
 
     <!-- Shift Control Settings Modal -->
-    <div v-if="isShiftModalOpen" class="modal-backdrop" role="dialog" aria-modal="true"
-      aria-labelledby="shift-control-modal-title" @click.self="closeShiftControlModal">
+    <div
+      v-if="isShiftModalOpen"
+      class="modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="shift-control-modal-title"
+      @click.self="closeShiftControlModal"
+    >
       <div class="modal-card shift-modal-card">
         <div class="modal-head">
           <div>
-            <span class="modal-badge shift-modal-badge">SHIFT CONTROL</span>
-            <span id="shift-control-modal-title" class="xl-sheet-tab">
-              {{ submissionDate }} · {{ shiftDraft.Shift }}
+            <span id="shift-control-modal-title" class="modal-badge shift-modal-badge">
+              SHIFT CONTROL
             </span>
           </div>
-          <button type="button" class="modal-close-btn" aria-label="Close shift control popup"
-            @click="closeShiftControlModal">
+          <button
+            type="button"
+            class="modal-close-btn"
+            aria-label="Close shift control popup"
+            @click="closeShiftControlModal"
+          >
             ✕
           </button>
         </div>
@@ -3021,11 +3109,13 @@ onUnmounted(() => {
           <div class="shift-date-bar">
             <label class="shift-date-label">
               <span>DATE:</span>
-              <input v-model="submissionDate" type="date" class="shift-date-input" required />
+              <input
+                v-model="submissionDate"
+                type="date"
+                class="shift-date-input"
+                required
+              />
             </label>
-            <span class="muted-sm">
-              Calculations match Date (<strong>{{ submissionDate }}</strong>) + SECTION + SHIFT + SHIFT_START_TIME
-            </span>
           </div>
 
           <div class="shift-slots-table-wrap">
@@ -3036,38 +3126,65 @@ onUnmounted(() => {
                   <th>SECTION</th>
                   <th>SHIFT</th>
                   <th>SHIFT_START_TIME</th>
-                  <th>CREATE_AT</th>
+                  <th>Action</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="(slot, sIdx) in shiftDraft.slots" :key="slot.id || sIdx">
+                <tr v-for="(slot, sIdx) in shiftDraft.slots" :key="slot._uid || slot.id || sIdx">
                   <td class="xl-row-num">{{ sIdx + 1 }}</td>
                   <td class="xl-cell">
-                    <select :value="slot.section" aria-label="Select section" class="xl-select"
-                      @change="onShiftSectionChange(sIdx, $event.target.value)">
+                    <select
+                      :value="slot.section"
+                      aria-label="Select section"
+                      class="xl-select"
+                      @change="onShiftSectionChange(sIdx, $event.target.value)"
+                    >
                       <option value="">-- Select section --</option>
-                      <option v-for="sec in SHIFT_SECTION_OPTIONS" :key="sec" :value="sec">
+                      <option
+                        v-for="sec in SHIFT_SECTION_OPTIONS"
+                        :key="sec"
+                        :value="sec"
+                      >
                         {{ sec }}
                       </option>
                     </select>
                   </td>
                   <td class="xl-cell">
-                    <select :value="slot.Shift || shiftDraft.Shift" aria-label="Row Shift" class="xl-select"
-                      @change="onShiftDropdownChange(sIdx, $event.target.value)">
-                      <option v-for="preset in SHIFT_PRESETS" :key="preset.key" :value="preset.label">
+                    <select
+                      :value="slot.Shift || shiftDraft.Shift"
+                      aria-label="Row Shift"
+                      class="xl-select"
+                      @change="onShiftDropdownChange(sIdx, $event.target.value)"
+                    >
+                      <option
+                        v-for="preset in SHIFT_PRESETS"
+                        :key="preset.key"
+                        :value="preset.label"
+                      >
                         {{ preset.label }}
                       </option>
                     </select>
                   </td>
                   <td class="xl-cell">
-                    <input :value="slot.Shift_Start_time" type="text" placeholder="e.g. 6 AM or 1PM" class="xl-input"
+                    <input
+                      :value="slot.Shift_Start_time"
+                      type="text"
+                      placeholder="e.g. 6 AM or 1PM"
+                      aria-label="Shift start time"
+                      class="xl-input"
                       @input="onSlotStartTimeTyping(slot, sIdx, $event.target.value)"
-                      @change="onSlotStartTimeChange(slot, sIdx, $event.target.value)" />
+                      @change="onSlotStartTimeChange(slot, sIdx, $event.target.value)"
+                    />
                   </td>
                   <td class="xl-cell shift-preview-cell">
-                    {{
-                      new Date(slot.create_at || shiftDraft.create_at || Date.now()).toLocaleTimeString()
-                    }}
+                    <button
+                      type="button"
+                      class="btn-icon-remove"
+                      aria-label="Remove shift row"
+                      @click="removeShiftSlot(sIdx)"
+                    >
+                      ✕
+                    </button>
                   </td>
                 </tr>
               </tbody>
@@ -3075,11 +3192,19 @@ onUnmounted(() => {
           </div>
 
           <div class="modal-footer">
-            <button type="button" class="btn btn-outline" @click="closeShiftControlModal">
+            <button
+              type="button"
+              class="btn btn-outline"
+              @click="closeShiftControlModal"
+            >
               Cancel
             </button>
-            <button type="submit" class="btn btn-primary">
-              Save Shift Config
+            <button
+              type="submit"
+              class="btn btn-primary"
+              :disabled="isSavingShift"
+            >
+              {{ isSavingShift ? 'Saving...' : 'Save Shift Config' }}
             </button>
           </div>
         </form>
@@ -3684,8 +3809,8 @@ onUnmounted(() => {
                 <td class="num-col">Avg {{ item.subtotal.targetEfficiencyStr }}%</td>
                 <td>
                   <span class="eff-pill" :class="item.subtotal.efficiency >= item.subtotal.targetEfficiency
-                    ? 'eff-ok'
-                    : 'eff-warn'
+                      ? 'eff-ok'
+                      : 'eff-warn'
                     ">
                     {{ item.subtotal.efficiencyStr }}%
                   </span>
@@ -3708,9 +3833,9 @@ onUnmounted(() => {
                 <button v-if="linesData.length > 0" type="button" class="act-btn act-inspect" style="margin-left: 8px"
                   @click="
                     searchQuery = '';
-                  onlyGapAlerts = false;
-                  onlyActiveLines = false;
-                  selectedUnit = 'ALL';
+                    onlyGapAlerts = false;
+                    onlyActiveLines = false;
+                    selectedUnit = 'ALL';
                   ">
                   Clear Filters
                 </button>
@@ -4088,6 +4213,22 @@ onUnmounted(() => {
   color: #fff;
 }
 
+.btn-icon-remove {
+  background: rgba(248, 113, 113, 0.16);
+  color: #fca5a5;
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  border-radius: 6px;
+  padding: 2px 7px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.btn-icon-remove:hover {
+  background: rgba(248, 113, 113, 0.3);
+  color: #ffffff;
+}
+
 .modal-form {
   display: flex;
   flex-direction: column;
@@ -4449,7 +4590,6 @@ onUnmounted(() => {
 }
 
 @media (max-width: 640px) {
-
   .form-input,
   .form-select {
     min-height: 42px;
@@ -5120,19 +5260,23 @@ onUnmounted(() => {
 }
 
 .unit-subtotal-row {
-  background: linear-gradient(90deg,
-      rgba(37, 99, 235, 0.18) 0%,
-      rgba(30, 41, 59, 0.92) 45%,
-      rgba(23, 34, 56, 0.95) 100%);
+  background: linear-gradient(
+    90deg,
+    rgba(37, 99, 235, 0.18) 0%,
+    rgba(30, 41, 59, 0.92) 45%,
+    rgba(23, 34, 56, 0.95) 100%
+  );
   border-top: 1px solid rgba(96, 165, 250, 0.32);
   border-bottom: 2px solid rgba(148, 163, 184, 0.24);
 }
 
 .unit-subtotal-row:hover {
-  background: linear-gradient(90deg,
-      rgba(37, 99, 235, 0.24) 0%,
-      rgba(30, 41, 59, 0.96) 45%,
-      rgba(23, 34, 56, 0.98) 100%);
+  background: linear-gradient(
+    90deg,
+    rgba(37, 99, 235, 0.24) 0%,
+    rgba(30, 41, 59, 0.96) 45%,
+    rgba(23, 34, 56, 0.98) 100%
+  );
 }
 
 .subtotal-label {
