@@ -96,7 +96,7 @@
               <tr class="excel-row grand-total-row">
                 <td class="row-index-header font-bold">Σ</td>
                 <td :colspan="HEADERS.indexOf('Ttl_Time')" class="excel-cell text-right font-bold">
-                  Grand Total Lost Time & Pieces (SMV: {{ AVG_SMV }}):
+                  Grand Total Lost Time &amp; Pieces (SMV: {{ AVG_SMV }}):
                 </td>
                 <td class="excel-cell font-bold badge-ttl-total">
                   {{ grandTotalTtlTime }} mins (≈ {{ grandTotalLostPieces }} pcs)
@@ -111,7 +111,7 @@
         <div class="charts-row" v-if="filteredRecords.length > 0">
           <div class="chart-col">
             <div class="chart-container-wrapper">
-              <div class="chart-header-title"> Daily Line Wise ( Loss Minute & Pcs)</div>
+              <div class="chart-header-title">Daily Line Wise (Loss Minute &amp; Pcs)</div>
               <div class="chart-canvas-box">
                 <Bar :data="DailyLineWiseBarChart" :options="barChartOptions" />
               </div>
@@ -119,7 +119,7 @@
           </div>
           <div class="chart-col">
             <div class="chart-container-wrapper">
-              <div class="chart-header-title"> Daily Department Wise ( Loss Minute & Pcs)</div>
+              <div class="chart-header-title">Daily Department Wise (Loss Minute &amp; Pcs)</div>
               <div class="chart-canvas-box">
                 <Bar :data="DailyDepartmentWiseBarChart" :options="barChartOptions" />
               </div>
@@ -128,18 +128,19 @@
         </div>
       </div>
 
-      <!-- Sub-Tab Content 2: Day-wise Bar Chart Analysis -->
+      <!-- Sub-Tab Content 2: Day-wise & Monthly Machine-wise Bar Chart Analysis -->
       <div v-if="activeDailySubTab === 'day_wise'">
         <div class="charts-row" style="margin-top: 16px;" v-if="records.length > 0">
           <div class="chart-col" style="flex: 1; min-width: 320px;">
             <div class="chart-container-wrapper">
-              <div class="chart-header-title">Day-wise NPT Impact Analysis (Lost Minutes vs Financial Loss)</div>
+              <div class="chart-header-title">Day-wise NPT Analysis (Lost Minutes vs Financial Loss)</div>
               <div class="chart-canvas-box" style="height: 340px;">
                 <Bar :data="dayWiseBarChartData" :options="barChartOptions" />
               </div>
             </div>
           </div>
         </div>
+
         <div v-if="records.length === 0" class="no-data" style="margin-top: 20px;">
           No historical records available for day-wise analysis.
         </div>
@@ -162,6 +163,28 @@
               <div class="chart-header-title">Monthly Lost Minutes Comparison</div>
               <div class="chart-canvas-box" style="height: 280px;">
                 <Line :data="monthlyMultiLineMinutesChartData" :options="lineChartMinutesOptions" />
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="charts-row" style="margin-top: 16px;" v-if="records.length > 0">
+          <div class="chart-col" style="flex: 1; min-width: 320px;"
+            v-if="monthlyMachineWiseBarChartData.labels.length > 0">
+            <div class="chart-container-wrapper">
+              <div class="chart-header-title">Monthly Machine-wise Analysis (Minutes vs Broken Frequency)</div>
+              <div class="chart-canvas-box" style="height: 340px;">
+                <Bar :data="monthlyMachineWiseBarChartData" :options="barChartOptions" />
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="charts-row" style="margin-top: 16px;" v-if="records.length > 0">
+          <div class="chart-col" style="flex: 1; min-width: 320px;"
+            v-if="monthlyMachineWiseLoessBarChartData.labels.length > 0">
+            <div class="chart-container-wrapper">
+              <div class="chart-header-title">Monthly Machine-wise Analysis (Minutes vs Broken Frequency)</div>
+              <div class="chart-canvas-box" style="height: 340px;">
+                <Bar :data="monthlyMachineWiseLoessBarChartData" :options="barChartOptions" />
               </div>
             </div>
           </div>
@@ -276,15 +299,34 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { QrcodeStream } from 'vue-qrcode-reader';
-import { Chart as ChartJS, Title, Tooltip, Legend, BarElement, CategoryScale, LinearScale } from 'chart.js';
-
-ChartJS.register(Title, Tooltip, Legend, BarElement, CategoryScale, LinearScale, ChartDataLabels);
-
+import {
+  Chart as ChartJS,
+  Title,
+  Tooltip,
+  Legend,
+  BarElement,
+  LineElement,
+  PointElement,
+  CategoryScale,
+  LinearScale
+} from 'chart.js';
 import ChartDataLabels from 'chartjs-plugin-datalabels';
 import { Bar, Line } from 'vue-chartjs';
 import { dbAPI } from '@/services/npt_qr_code_api.js';
 import { dbAPI as Unit_line_API } from '@/services/unit_line_api.js';
 import { dbAPI as Problem_Category_API } from '@/services/problem_category_api.js';
+
+ChartJS.register(
+  Title,
+  Tooltip,
+  Legend,
+  BarElement,
+  LineElement,
+  PointElement,
+  CategoryScale,
+  LinearScale,
+  ChartDataLabels
+);
 
 const SHEET_NAME = 'DailyNPTrecord';
 const HEADERS = [
@@ -460,7 +502,6 @@ const formatSecondsAsClock = (totalSec) => {
   return hrs > 0 ? `${pad(hrs)}:${pad(mins)}:${pad(secs)}` : `${pad(mins)}:${pad(secs)}`;
 };
 
-// Duration_time কলামে 12:01:42 AM বা Date স্ট্রিং এলে Start_time ও End_Time থেকে সঠিক Duration দেখায়
 const getFormattedDurationCell = (record) => {
   if (!record || typeof record !== 'object') return '-';
   const startSec = parseTotalSecondsFrom12h(record.Start_time);
@@ -475,7 +516,6 @@ const getFormattedDurationCell = (record) => {
   const rawDur = String(record.Duration_time || '').trim();
   if (!rawDur || rawDur === '-') return '-';
 
-  // Sheets-এর Date/AM-PM duration (যেমন "12:01:42 AM") হলে সময় অংশ হিসেবে ধরে ক্লক ফরম্যাটে দেখায়
   const ampmDurMatch = rawDur.match(/^12:(\d{2}):(\d{2})\s*AM$/i);
   if (ampmDurMatch) {
     return `${ampmDurMatch[1]}:${ampmDurMatch[2]}`;
@@ -734,7 +774,6 @@ const finalizeResolution = async () => {
     closeScanModal();
     showBanner(`Resolved ${target.QRcode} (${target.Ttl_Time}).`, 'success', 3500);
 
-    // পেজ reload না করেই ফ্রেশ ডেটা সিঙ্ক
     await refreshRecords(false, true);
   } catch (error) {
     console.error('Failed to save resolution data:', error);
@@ -785,37 +824,6 @@ const grandTotalLostPieces = computed(() => {
   return Math.round(grandTotalTtlTime.value / AVG_SMV);
 });
 
-const problemBarChartData = computed(() => {
-  const map = {};
-  filteredRecords.value.forEach((record) => {
-    const key = record.Type_of_Problem || 'Unassigned';
-    const timeVal = parseNumericMinutes(record.Ttl_Time);
-    if (!map[key]) {
-      map[key] = { mins: 0, taka: 0 };
-    }
-    map[key].mins += timeVal;
-    map[key].taka += timeVal * costPerMinute_TAKA;
-  });
-
-  const labels = Object.keys(map);
-  return {
-    labels,
-    datasets: [
-      {
-        label: 'Lost Minutes (mins)',
-        data: labels.map((k) => map[k].mins),
-        backgroundColor: '#1a73e8',
-        borderRadius: 2
-      },
-      {
-        label: 'Financial Loss (৳ Taka)',
-        data: labels.map((k) => Number(map[k].taka.toFixed(2))),
-        backgroundColor: '#34a853',
-        borderRadius: 2
-      }
-    ]
-  };
-});
 const DailyLineWiseBarChart = computed(() => {
   const map = {};
   filteredRecords.value.forEach((record) => {
@@ -847,6 +855,7 @@ const DailyLineWiseBarChart = computed(() => {
     ]
   };
 });
+
 const DailyDepartmentWiseBarChart = computed(() => {
   const map = {};
   filteredRecords.value.forEach((record) => {
@@ -886,7 +895,6 @@ const DailyDepartmentWiseBarChart = computed(() => {
   };
 });
 
-
 const dayWiseBarChartData = computed(() => {
   const dayMap = {};
   records.value.forEach((record) => {
@@ -925,6 +933,155 @@ const dayWiseBarChartData = computed(() => {
     ]
   };
 });
+
+const selectedMonth = ref('ALL');
+
+function getRecordMonthKey(record) {
+  const normalized = normalizeDateToDDMMYYYY(record.Created_Date || record.Date || '');
+  const match = String(normalized).match(/^\d{2}-(\d{2}-\d{4})$/);
+  return match ? match[1] : 'Unassigned';
+}
+
+function isMachineCode(val = '') {
+  const clean = String(val || '').trim().toUpperCase();
+  if (!clean) return false;
+  if (/^(LINE|L)[\s_-]*\d+$/i.test(clean)) return false;
+  return /\bMCH\b|MCH[\s_-]*\d+/i.test(clean);
+}
+
+const monthlyMachineWiseBarChartData = computed(() => {
+  const machineMap = {}
+
+    ; (records.value || []).forEach((record) => {
+      const monthKey = getRecordMonthKey(record)
+      if (selectedMonth.value && selectedMonth.value !== 'ALL' && monthKey !== selectedMonth.value) {
+        return
+      }
+
+      const machineLabel = String(
+        record.QRcode ?? record.Machine_No ?? record.Machine ?? record.machine ?? ''
+      ).trim()
+
+      if (!isMachineCode(machineLabel)) return
+
+      const mins = parseNumericMinutes(record.Ttl_Time)
+      const dayKey = normalizeDateToDDMMYYYY(record.Created_Date || record.Date || '')
+
+      if (!machineMap[machineLabel]) {
+        machineMap[machineLabel] = {
+          sum: 0,
+          count: 0,
+          daysSet: new Set()
+        }
+      }
+
+      machineMap[machineLabel].sum += mins
+
+      const isBroken = mins > 0 || Boolean(record.End_Time || record.End_time)
+      if (isBroken) {
+        machineMap[machineLabel].count += 1
+        if (dayKey) {
+          machineMap[machineLabel].daysSet.add(dayKey)
+        }
+      }
+    })
+
+  const sortedMachines = Object.keys(machineMap).sort(
+    (a, b) => machineMap[b].sum - machineMap[a].sum
+  )
+
+  const counts = sortedMachines.map((m) => machineMap[m].count)
+  const daysCounts = sortedMachines.map((m) => machineMap[m].daysSet.size)
+
+  return {
+    labels: sortedMachines,
+    datasets: [
+      {
+        label: 'Days',
+        data: daysCounts,
+        brokenCounts: counts,
+        daysBroken: daysCounts,
+        backgroundColor: '#1a73e8',
+        borderRadius: 2
+      },
+      {
+        label: 'Broken Times',
+        data: counts,
+        brokenCounts: counts,
+        days: daysCounts,
+        backgroundColor: '#dc2626',
+        borderRadius: 2
+      }
+    ]
+  }
+})
+const monthlyMachineWiseLoessBarChartData = computed(() => {
+  const machineMap = {}
+
+    ; (records.value || []).forEach((record) => {
+      const monthKey = getRecordMonthKey(record)
+      if (selectedMonth.value && selectedMonth.value !== 'ALL' && monthKey !== selectedMonth.value) {
+        return
+      }
+
+      const machineLabel = String(
+        record.QRcode ?? record.Machine_No ?? record.Machine ?? record.machine ?? ''
+      ).trim()
+
+      if (!isMachineCode(machineLabel)) return
+
+      const mins = parseNumericMinutes(record.Ttl_Time)
+      const dayKey = normalizeDateToDDMMYYYY(record.Created_Date || record.Date || '')
+
+      if (!machineMap[machineLabel]) {
+        machineMap[machineLabel] = {
+          sum: 0,
+          daysSet: new Set()
+        }
+      }
+
+      machineMap[machineLabel].sum += mins
+
+      const isBroken = mins > 0 || Boolean(record.End_Time || record.End_time)
+      if (isBroken) {
+        machineMap[machineLabel].count += 1
+        if (dayKey) {
+          machineMap[machineLabel].daysSet.add(dayKey)
+        }
+      }
+    })
+
+  const sortedMachines = Object.keys(machineMap).sort(
+    (a, b) => machineMap[b].sum - machineMap[a].sum
+  )
+
+  const minutesList = sortedMachines.map((m) => Number(machineMap[m].sum.toFixed(2)))
+
+  const counts = sortedMachines.map((m) => machineMap[m].count)
+  const daysCounts = sortedMachines.map((m) => machineMap[m].daysSet.size)
+
+  return {
+    labels: sortedMachines,
+    datasets: [
+      {
+        label: 'Minutes',
+        data: minutesList,
+        brokenCounts: counts,
+        daysBroken: daysCounts,
+        backgroundColor: '#1a73e8',
+        borderRadius: 2
+      },
+      {
+        label: 'Broken Times',
+        data: counts,
+        brokenCounts: counts,
+        daysBroken: daysCounts,
+        backgroundColor: '#dc2626',
+        borderRadius: 2
+      }
+    ]
+  }
+})
 
 const monthlyMultiLineMinutesChartData = computed(() => {
   const allProblems = [...new Set(records.value.map((r) => r.Type_of_Problem || 'Unassigned'))].sort();
