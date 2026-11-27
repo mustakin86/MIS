@@ -4,8 +4,11 @@ import { Html5Qrcode } from 'html5-qrcode'
 import { dbAPI as Unit_line_API } from '@/services/unit_line_api.js'
 import { dbAPI as item_API } from '@/services/item_api.js'
 import { dbAPI } from '@/services/live-board/shift_api.js'
+import { dbAPI as LineSetting } from '@/services/live-board/line_setting_api.js'
 
 const BACKEND_URL = ''
+const LINESETTING_SHEET_NAME = 'LineSetting'
+const DEFAULT_FACTORY_NAME = 'AHASAN COMPOSITE LTD'
 const UNIT_LINE_SHEET = 'Unit_line_No'
 const SHIFT_SHEET_NAME = 'Shift_time'
 const SHIFT_STORAGE_KEY = 'mis_live_board_shift_config_v3'
@@ -47,6 +50,52 @@ const DEFAULT_SLOT_TEMPLATES = [
   { ratio: 0.125, dhu: 1.2, downtimeMin: 0, problem: null },
   { ratio: 0.125, dhu: 0.0, downtimeMin: 0, problem: null }
 ]
+
+/**
+ * Calculates target pieces for a given slot duration using:
+ * Target = (Total Manpower * slotMinutes * (Target Efficiency / 100)) / SMV
+ */
+function calcSlotTargetFromEfficiency(
+  operators = 0,
+  helpers = 0,
+  smv = 14,
+  targetEfficiencyPct = 75,
+  slotMinutes = 60
+) {
+  const manpower = Math.max(0, Number(operators) || 0) + Math.max(0, Number(helpers) || 0)
+  const cleanSmv = Math.max(0.1, Number(smv) || 14)
+  const effDecimal = Math.max(0, Number(targetEfficiencyPct) || 0) / 100
+  const mins = Math.max(0, Number(slotMinutes) || 60)
+
+  const earnedMinutes = manpower * mins * effDecimal
+  return Math.round(earnedMinutes / cleanSmv)
+}
+
+function getSlotMinutes(slot, fallbackMins = 60) {
+  if (typeof slot?.slotMinutes === 'number' && slot.slotMinutes > 0) {
+    return slot.slotMinutes
+  }
+  const startMin = parseFlexibleTimeToMinutes(slot?.hourStartTime, NaN)
+  const endMin = parseFlexibleTimeToMinutes(slot?.endTime, NaN)
+  if (!Number.isNaN(startMin) && !Number.isNaN(endMin)) {
+    let diff = endMin - startMin
+    if (diff <= 0) diff += 1440
+    if (diff > 0) return diff
+  }
+  return fallbackMins
+}
+
+function getElapsedSlotMinutes(slots = [], activeIdx = 0) {
+  if (!Array.isArray(slots) || slots.length === 0) {
+    return Math.max(60, (Math.max(0, Number(activeIdx) || 0) + 1) * 60)
+  }
+  const clampedIdx = Math.min(Math.max(0, Number(activeIdx) || 0), slots.length - 1)
+  let totalMins = 0
+  for (let i = 0; i <= clampedIdx; i++) {
+    totalMins += getSlotMinutes(slots[i], i === 0 ? FIRST_SLOT_OFFSET_MINUTES : 60)
+  }
+  return Math.max(60, totalMins)
+}
 
 function toDateKey(rawDate = new Date()) {
   if (rawDate instanceof Date && !Number.isNaN(rawDate.getTime())) {
@@ -112,10 +161,6 @@ function calcHourEndTime(hourStartTime = '08:00', stepMinutes = 60) {
   return addMinutesToTime(hourStartTime, stepMinutes)
 }
 
-function calcNextHourFromEndTime(endTime = '09:00', stepMinutes = 60) {
-  return addMinutesToTime(endTime, stepMinutes)
-}
-
 function getConfiguredDurationHours(fallbackHours = DEFAULT_SHIFT_HOURS) {
   const hrs = Number(fallbackHours)
   return Number.isFinite(hrs) && hrs > 0 ? Number(hrs.toFixed(2)) : DEFAULT_SHIFT_HOURS
@@ -151,12 +196,21 @@ function buildShiftSlotsFromStartPlus80Min(
           ? formatMinutesToHHMM(parseFlexibleTimeToMinutes(startTime, 8 * 60))
           : formatMinutesToHHMM(parseFlexibleTimeToMinutes(parts[0] || startTime, 8 * 60))
       const slotEnd =
-        parts[1] && !Number.isNaN(Date.parse(`1970-01-01 ${parts[1]}`))
+        parts[1] && parseFlexibleTimeToMinutes(parts[1], NaN) >= 0
           ? formatMinutesToHHMM(parseFlexibleTimeToMinutes(parts[1], 9 * 60))
           : calcHourEndTime(slotStart, 60)
-      const nextHour = calcNextHourFromEndTime(slotEnd, 60)
       const sectionLabel = rawSection || `${slotStart} - ${slotEnd}`
       const rawStartLabel = String(slot.Shift_Start_time || cleanShiftStart).trim()
+      const computedMins = (() => {
+        const sMin = parseFlexibleTimeToMinutes(slotStart, NaN)
+        const eMin = parseFlexibleTimeToMinutes(slotEnd, NaN)
+        if (!Number.isNaN(sMin) && !Number.isNaN(eMin)) {
+          let d = eMin - sMin
+          if (d <= 0) d += 1440
+          if (d > 0) return d
+        }
+        return Number(slot.slotMinutes) || (idx === 0 ? FIRST_SLOT_OFFSET_MINUTES : 60)
+      })()
 
       return {
         id: String(slot.id || `${baseId}-${idx + 1}`),
@@ -164,7 +218,7 @@ function buildShiftSlotsFromStartPlus80Min(
         hour: sectionLabel,
         hourStartTime: slotStart,
         endTime: slotEnd,
-        nextHour,
+        slotMinutes: computedMins,
         Shift: String(slot.Shift || shiftName || 'Shift A (Day)'),
         Shift_Start_time: rawStartLabel,
         submissionDate: toDateKey(slot.submissionDate || slot.date || dateKey),
@@ -194,7 +248,6 @@ function buildShiftSlotsFromStartPlus80Min(
     const nextCursor = cursor + stepMins
     const slotStart = formatMinutesToHHMM(cursor)
     const slotEnd = formatMinutesToHHMM(nextCursor)
-    const nextHour = calcNextHourFromEndTime(slotEnd, 60)
     const sectionLabel = `${slotStart} - ${slotEnd}`
     const template = DEFAULT_SLOT_TEMPLATES[idx % DEFAULT_SLOT_TEMPLATES.length]
     const ratio = Number((stepMins / totalShiftMins).toFixed(4))
@@ -205,7 +258,7 @@ function buildShiftSlotsFromStartPlus80Min(
       hour: sectionLabel,
       hourStartTime: slotStart,
       endTime: slotEnd,
-      nextHour,
+      slotMinutes: stepMins,
       Shift: shiftName,
       Shift_Start_time: cleanShiftStart,
       submissionDate: dateKey,
@@ -243,8 +296,8 @@ function buildShiftSlotsFromStartPlus80Min(
  */
 function findSlotIndexForScanTime(
   scanDate = new Date(),
-  startTime = shiftConfig.value.Shift_Start_time || shiftConfig.value.startTime,
-  slots = BASE_HOURS.value
+  startTime = '08:00',
+  slots = []
 ) {
   if (!Array.isArray(slots) || slots.length <= 1) return 0
 
@@ -275,6 +328,7 @@ const initialCreatedAt = new Date().toISOString()
 const submissionDate = ref(initialDate)
 const shiftRules = ref([])
 const isSavingShift = ref(false)
+const isSavingLineSetting = ref(false)
 
 const shiftConfig = ref({
   id: initialId,
@@ -398,6 +452,53 @@ function resolveMatchingShiftRule({
   return sameDate || rules[0]
 }
 
+function getLineShiftContext(line, fallbackDateKey = submissionDate.value) {
+  const activeDateKey = toDateKey(
+    line?.submissionDate || line?.date || fallbackDateKey || new Date()
+  )
+  const lineSection = line?.section || line?.unit || ''
+  const lineShift = line?.Shift || shiftConfig.value.Shift
+  const matchedRule = resolveMatchingShiftRule({
+    date: activeDateKey,
+    section: lineSection,
+    shift: lineShift,
+    startTime: line?.Shift_Start_time || null
+  })
+
+  const effectiveStartLabel = String(
+    matchedRule?.Shift_Start_time ||
+      line?.Shift_Start_time ||
+      shiftConfig.value.Shift_Start_time ||
+      shiftConfig.value.startTime ||
+      '08:00'
+  ).trim()
+  const ruleStartMin = parseFlexibleTimeToMinutes(effectiveStartLabel, 8 * 60)
+  const cleanRuleStart = formatMinutesToHHMM(ruleStartMin)
+  const ruleHours = getConfiguredDurationHours(
+    matchedRule?.durationHours || shiftConfig.value.durationHours
+  )
+  const ruleSlots = buildShiftSlotsFromStartPlus80Min(
+    cleanRuleStart,
+    ruleHours,
+    matchedRule?.Shift || lineShift,
+    matchedRule?.id || shiftConfig.value.id,
+    matchedRule?.create_at || shiftConfig.value.create_at,
+    null,
+    effectiveStartLabel,
+    activeDateKey
+  )
+
+  return {
+    activeDateKey,
+    lineSection,
+    lineShift,
+    matchedRule,
+    effectiveStartLabel,
+    cleanRuleStart,
+    ruleSlots
+  }
+}
+
 function loadSavedShiftConfig() {
   if (typeof window === 'undefined') return
   try {
@@ -472,7 +573,7 @@ function persistShiftConfig(cfg) {
 function createEmptyShiftRow(
   rowIdx = 0,
   baseId = 'SHF-001',
-  shiftName = '',
+  shiftName = 'Shift A (Day)',
   startTime = '',
   createdAtIso = new Date().toISOString(),
   dateKey = toDateKey(new Date())
@@ -481,7 +582,7 @@ function createEmptyShiftRow(
     id: `${baseId}-${rowIdx + 1}`,
     section: '',
     hour: '',
-    Shift: shiftName,
+    Shift: shiftName || 'Shift A (Day)',
     Shift_Start_time: startTime,
     submissionDate: dateKey,
     date: dateKey,
@@ -500,14 +601,15 @@ function openShiftControlModal() {
   const currentHours = getConfiguredDurationHours(shiftConfig.value.durationHours)
   const computedEnd = calcEndTimeFromStart(cleanStart, currentHours)
   const cleanId = shiftConfig.value.id || 'SHF-001'
+  const cleanShift = shiftConfig.value.Shift || shiftConfig.value.shiftName || 'Shift A (Day)'
   const createdAtIso = new Date().toISOString()
 
   shiftDraft.value = {
     id: cleanId,
-    Shift: '',
-    shiftName: '',
-    Shift_Start_time: '',
-    startTime: '',
+    Shift: cleanShift,
+    shiftName: cleanShift,
+    Shift_Start_time: cleanStart,
+    startTime: cleanStart,
     endTime: computedEnd,
     durationHours: currentHours,
     submissionDate: activeDateKey,
@@ -515,7 +617,7 @@ function openShiftControlModal() {
     create_at: createdAtIso,
     autoAlignActiveHour: Boolean(shiftConfig.value.autoAlignActiveHour),
     recalcHourlyTargets: shiftConfig.value.recalcHourlyTargets !== false,
-    slots: [createEmptyShiftRow(0, cleanId, '', '', createdAtIso, activeDateKey)]
+    slots: [createEmptyShiftRow(0, cleanId, cleanShift, '', createdAtIso, activeDateKey)]
   }
   isShiftModalOpen.value = true
 }
@@ -534,8 +636,8 @@ function resetShiftDraft() {
     id: cleanId,
     Shift: cleanShift,
     shiftName: cleanShift,
-    Shift_Start_time: '',
-    startTime: '',
+    Shift_Start_time: cleanStart,
+    startTime: cleanStart,
     endTime: computedEnd,
     durationHours: currentHours,
     submissionDate: activeDateKey,
@@ -623,84 +725,67 @@ function removeShiftSlot(sIdx) {
 }
 
 function applyShiftConfigToLines(nextConfig, savedDateKey = toDateKey(submissionDate.value)) {
-  const slots = nextConfig.slots || []
-  const maxSlotIdx = Math.max(0, slots.length - 1)
+  const maxSlotIdx = Math.max(0, (nextConfig.slots || []).length - 1)
   const refNow = new Date()
 
   linesData.value.forEach((line, lIdx) => {
-    const lineSec = line.section || line.unit || ''
-    const lineShift = line.Shift || nextConfig.Shift
-    const matchedRule = resolveMatchingShiftRule({
-      date: savedDateKey,
-      section: lineSec,
-      shift: lineShift,
-      startTime: line.Shift_Start_time || null
-    })
-
-    const effectiveRuleStart =
-      matchedRule?.Shift_Start_time ||
-      matchedRule?.startTime ||
-      nextConfig.Shift_Start_time ||
-      nextConfig.startTime ||
-      '08:00'
-    const ruleStartMin = parseFlexibleTimeToMinutes(effectiveRuleStart, 8 * 60)
-    const cleanRuleStart = formatMinutesToHHMM(ruleStartMin)
-    const ruleHours = getConfiguredDurationHours(
-      matchedRule?.durationHours || nextConfig.durationHours
-    )
-    const ruleSlots = buildShiftSlotsFromStartPlus80Min(
-      cleanRuleStart,
-      ruleHours,
-      matchedRule?.Shift || lineShift,
-      matchedRule?.id || nextConfig.id,
-      matchedRule?.create_at || nextConfig.create_at,
-      null,
-      effectiveRuleStart,
+    const { matchedRule, effectiveStartLabel, cleanRuleStart, ruleSlots } = getLineShiftContext(
+      line,
       savedDateKey
     )
 
     line.submissionDate = savedDateKey
-    line.Shift = matchedRule?.Shift || lineShift
-    line.Shift_Start_time = effectiveRuleStart
+    if (matchedRule?.Shift) {
+      line.Shift = matchedRule.Shift
+    } else if (!line.Shift) {
+      line.Shift = nextConfig.Shift
+    }
+    line.Shift_Start_time = effectiveStartLabel
 
-    const dailyTarget = Number(line.dailyTarget) || 0
     const existingRows = Array.isArray(line.hourlyRows) ? line.hourlyRows : []
     const existingBySlotLabel = new Map(
       existingRows.map((r) => [String(r.hour || '').trim(), r])
     )
-    let remaining = dailyTarget
 
-    const baseSlotsForRows = slots.length ? slots : ruleSlots
+    const baseSlotsForRows = ruleSlots.length ? ruleSlots : nextConfig.slots || []
+    let totalEfficiencyTarget = 0
 
     line.hourlyRows = baseSlotsForRows.map((slot, idx) => {
       const slotLabel = String(slot.section || slot.hour || '').trim()
       const prev = existingBySlotLabel.get(slotLabel) || existingRows[idx]
-      const isLast = idx === baseSlotsForRows.length - 1
-      const computedTarget = isLast
-        ? Math.max(0, remaining)
-        : Math.round(dailyTarget * (Number(slot.ratio) || 1 / baseSlotsForRows.length))
-      remaining -= computedTarget
+      const slotMins = getSlotMinutes(slot, idx === 0 ? FIRST_SLOT_OFFSET_MINUTES : 60)
+
+      const computedTarget = calcSlotTargetFromEfficiency(
+        line.operators,
+        line.helpers,
+        line.smv,
+        line.targetEfficiency,
+        slotMins
+      )
 
       const target =
-        nextConfig.recalcHourlyTargets || !prev ? computedTarget : Number(prev.target) || 0
+        nextConfig.recalcHourlyTargets || !prev
+          ? computedTarget
+          : Number(prev.target) || computedTarget
+      totalEfficiencyTarget += target
 
       const actual = prev ? Math.max(0, Math.round(Number(prev.actual) || 0)) : 0
       const dhu = prev ? Math.max(0, Number(prev.dhu) || 0) : actual > 0 ? slot.dhu : 0
       const qcPass = prev
         ? Math.min(
-          actual,
-          Math.max(0, Math.round(Number(prev.qcPass) ?? calcHourQcPass(actual, dhu)))
-        )
+            actual,
+            Math.max(0, Math.round(Number(prev.qcPass) ?? calcHourQcPass(actual, dhu)))
+          )
         : calcHourQcPass(actual, dhu)
       const downtimeMin = prev ? Math.max(0, Number(prev.downtimeMin) || 0) : 0
       const nptProblems = prev
         ? normalizeNptProblems(
-          prev.nptProblems,
-          downtimeMin,
-          slot.problem || NPT_PROBLEM_TYPES[(lIdx + idx) % NPT_PROBLEM_TYPES.length],
-          lIdx,
-          idx
-        )
+            prev.nptProblems,
+            downtimeMin,
+            slot.problem || NPT_PROBLEM_TYPES[(lIdx + idx) % NPT_PROBLEM_TYPES.length],
+            lIdx,
+            idx
+          )
         : []
 
       return {
@@ -713,6 +798,10 @@ function applyShiftConfigToLines(nextConfig, savedDateKey = toDateKey(submission
         nptProblems
       }
     })
+
+    if (nextConfig.recalcHourlyTargets && totalEfficiencyTarget > 0) {
+      line.dailyTarget = totalEfficiencyTarget
+    }
 
     if (matchedRule || nextConfig.autoAlignActiveHour) {
       line.activeHourIndex = findSlotIndexForScanTime(refNow, cleanRuleStart, ruleSlots)
@@ -803,10 +892,9 @@ async function saveShiftControl() {
 
   const firstSlotStartRaw = String(
     filledSlots[0]?.Shift_Start_time ||
-    rawSlots[0]?.Shift_Start_time ||
-    shiftDraft.value.Shift_Start_time ||
-    shiftConfig.value.Shift_Start_time ||
-    '08:00'
+      shiftConfig.value.Shift_Start_time ||
+      shiftConfig.value.startTime ||
+      '08:00'
   ).trim()
 
   const parsedMin = parseFlexibleTimeToMinutes(
@@ -850,33 +938,41 @@ async function saveShiftControl() {
   })
   shiftRules.value = Array.from(nextRuleMap.values())
 
+  // Only update global shiftConfig if no specific section was targeted or it matches default board flow
+  const hasSpecificSection = normalizedSlots.some((s) => Boolean(s.section))
   const nextSlots = buildShiftSlotsFromStartPlus80Min(
     cleanStartHHMM,
     hrs,
     cleanShift,
     recordId,
     createdAtIso,
-    normalizedSlots,
+    null,
     firstSlotStartRaw,
     savedDateKey
   )
 
-  const nextConfig = {
-    ...shiftConfig.value,
-    id: recordId,
-    Shift: cleanShift,
-    shiftName: cleanShift,
-    Shift_Start_time: firstSlotStartRaw,
-    startTime: firstSlotStartRaw,
-    endTime: cleanEnd,
-    durationHours: hrs,
-    submissionDate: savedDateKey,
-    date: savedDateKey,
-    create_at: createdAtIso,
-    autoAlignActiveHour: Boolean(shiftDraft.value.autoAlignActiveHour),
-    recalcHourlyTargets: Boolean(shiftDraft.value.recalcHourlyTargets),
-    slots: nextSlots
-  }
+  const nextConfig = hasSpecificSection
+    ? {
+        ...shiftConfig.value,
+        submissionDate: savedDateKey,
+        date: savedDateKey
+      }
+    : {
+        ...shiftConfig.value,
+        id: recordId,
+        Shift: cleanShift,
+        shiftName: cleanShift,
+        Shift_Start_time: firstSlotStartRaw,
+        startTime: firstSlotStartRaw,
+        endTime: cleanEnd,
+        durationHours: hrs,
+        submissionDate: savedDateKey,
+        date: savedDateKey,
+        create_at: createdAtIso,
+        autoAlignActiveHour: Boolean(shiftDraft.value.autoAlignActiveHour),
+        recalcHourlyTargets: Boolean(shiftDraft.value.recalcHourlyTargets),
+        slots: nextSlots
+      }
 
   shiftConfig.value = nextConfig
   persistShiftConfig(nextConfig)
@@ -997,15 +1093,31 @@ function normalizeNptProblems(
   return [{ problem: String(defaultProb).toUpperCase(), minutes: cleanMins }]
 }
 
-function buildHourlyRows(dailyTarget, activeHourIndex = 6, lineIndex = 0) {
+function buildHourlyRows(
+  dailyTarget,
+  activeHourIndex = 6,
+  lineIndex = 0,
+  lineConfig = {}
+) {
   const slots = BASE_HOURS.value
-  let remaining = dailyTarget
+  const hasEfficiencyInputs =
+    lineConfig &&
+    (lineConfig.smv !== undefined ||
+      lineConfig.targetEfficiency !== undefined ||
+      lineConfig.operators !== undefined ||
+      lineConfig.helpers !== undefined)
+
   return slots.map((slot, idx) => {
-    const isLast = idx === slots.length - 1
-    const target = isLast
-      ? Math.max(0, remaining)
-      : Math.round(dailyTarget * slot.ratio)
-    remaining -= target
+    const slotMins = getSlotMinutes(slot, idx === 0 ? FIRST_SLOT_OFFSET_MINUTES : 60)
+    const target = hasEfficiencyInputs
+      ? calcSlotTargetFromEfficiency(
+          lineConfig.operators ?? 32,
+          lineConfig.helpers ?? 6,
+          lineConfig.smv ?? 14.0,
+          lineConfig.targetEfficiency ?? 75,
+          slotMins
+        )
+      : Math.round((Number(dailyTarget) || 0) * (Number(slot.ratio) || 1 / slots.length))
 
     let actual = 0
     if (idx < activeHourIndex) {
@@ -1060,21 +1172,21 @@ function normalizeLineRows(rawRows, lineIndex = 0) {
 
 function aggregateProblemsFromRows(hourlyRows) {
   const map = {}
-    ; (hourlyRows || []).forEach((r, idx) => {
-      const mins = Math.max(0, Number(r.downtimeMin) || 0)
-      if (mins <= 0) return
-      const items = normalizeNptProblems(
-        r.nptProblems,
-        mins,
-        NPT_PROBLEM_TYPES[idx % NPT_PROBLEM_TYPES.length],
-        0,
-        idx
-      )
-      items.forEach((entry) => {
-        const key = entry.problem || 'MACHINE PROBLEM'
-        map[key] = (map[key] || 0) + (Number(entry.minutes) || 0)
-      })
+  ;(hourlyRows || []).forEach((r, idx) => {
+    const mins = Math.max(0, Number(r.downtimeMin) || 0)
+    if (mins <= 0) return
+    const items = normalizeNptProblems(
+      r.nptProblems,
+      mins,
+      NPT_PROBLEM_TYPES[idx % NPT_PROBLEM_TYPES.length],
+      0,
+      idx
+    )
+    items.forEach((entry) => {
+      const key = entry.problem || 'MACHINE PROBLEM'
+      map[key] = (map[key] || 0) + (Number(entry.minutes) || 0)
     })
+  })
   return Object.entries(map)
     .map(([problem, minutes]) => ({ problem, minutes }))
     .sort((a, b) => b.minutes - a.minutes)
@@ -1083,7 +1195,7 @@ function aggregateProblemsFromRows(hourlyRows) {
 function mergeProblemSummaries(summaries) {
   const map = {}
   summaries.forEach((list) => {
-    ; (list || []).forEach((item) => {
+    ;(list || []).forEach((item) => {
       const key = item.problem || 'MACHINE PROBLEM'
       map[key] = (map[key] || 0) + (Number(item.minutes) || 0)
     })
@@ -1099,6 +1211,18 @@ const itemOptions = ref(Object.values(ITEM_NAMES_BY_TYPE))
 function buildDefaultFallbackLines(totalLines = 33) {
   return Array.from({ length: totalLines }, (_, idx) => {
     const num = idx + 1
+    const smv = 14.0
+    const operators = 32
+    const helpers = 6
+    const targetEfficiency = 75
+    const hourlyRows = buildHourlyRows(0, 6, idx, {
+      smv,
+      operators,
+      helpers,
+      targetEfficiency
+    })
+    const computedDailyTarget = hourlyRows.reduce((s, r) => s + (Number(r.target) || 0), 0)
+
     return {
       id: `line-${num}`,
       lineName: `Line-${num}`,
@@ -1113,15 +1237,15 @@ function buildDefaultFallbackLines(totalLines = 33) {
       itemName: itemOptions.value[0] || 'Apparel Item',
       modelNo: MODELS[idx % MODELS.length],
       buyer: BUYERS[idx % BUYERS.length],
-      smv: 14.0,
-      operators: 32,
-      helpers: 6,
-      dailyTarget: 1400,
-      targetEfficiency: 75,
+      smv,
+      operators,
+      helpers,
+      dailyTarget: computedDailyTarget || 1400,
+      targetEfficiency,
       maxLineGap: 60,
       firstMachineTotal: 0,
       activeHourIndex: 6,
-      hourlyRows: buildHourlyRows(1400, 6, idx)
+      hourlyRows
     }
   })
 }
@@ -1165,6 +1289,8 @@ const liveClock = ref(new Date().toLocaleTimeString())
 let simTimer = null
 let toastTimer = null
 let clockTimer = null
+let isProcessingQrScan = false
+let qrSessionCounter = 0
 
 const isPopupOpen = ref(false)
 const excelGridRef = ref(null)
@@ -1218,6 +1344,15 @@ function notify(msg) {
   }, 2400)
 }
 
+async function parseJsonSafely(res) {
+  const text = await res.text()
+  try {
+    return JSON.parse(text)
+  } catch (_) {
+    throw new Error(text ? `Invalid JSON response: ${text.slice(0, 120)}` : 'Empty response from server')
+  }
+}
+
 function normalizeLineIdFromLabel(label, fallbackIdx = 0) {
   const match = String(label || '').match(/(\d+)/)
   if (match) {
@@ -1229,19 +1364,20 @@ function normalizeLineIdFromLabel(label, fallbackIdx = 0) {
 function mapSheetRowToLine(rawRow, fallbackIdx = 0, existingLine = null) {
   const unitName = String(
     rawRow?.Unit ??
-    rawRow?.unit ??
-    rawRow?.unitName ??
-    existingLine?.unit ??
-    getUnitForLineIndex(fallbackIdx)
+      rawRow?.unit ??
+      rawRow?.unitName ??
+      existingLine?.unit ??
+      getUnitForLineIndex(fallbackIdx)
   ).trim()
 
   const lineLabel = String(
     rawRow?.Line_No ??
-    rawRow?.line_no ??
-    rawRow?.lineNo ??
-    rawRow?.lineName ??
-    existingLine?.lineName ??
-    `Line-${fallbackIdx + 1}`
+      rawRow?.line_no ??
+      rawRow?.lineNo ??
+      rawRow?.lineName ??
+      rawRow?.Line ??
+      existingLine?.lineName ??
+      `Line-${fallbackIdx + 1}`
   ).trim()
 
   const id = String(
@@ -1249,17 +1385,22 @@ function mapSheetRowToLine(rawRow, fallbackIdx = 0, existingLine = null) {
   ).trim()
 
   const styleNo = String(
-    rawRow?.styleNo ?? rawRow?.style_no ?? rawRow?.Style ?? existingLine?.styleNo ?? ''
+    rawRow?.styleNo ?? rawRow?.style_no ?? rawRow?.Style_no ?? rawRow?.Style ?? existingLine?.styleNo ?? ''
   ).trim()
 
-  const dailyTarget =
+  const smv = Number(rawRow?.smv ?? rawRow?.SMV ?? existingLine?.smv ?? 14.0) || 14.0
+  const operators =
+    Number(rawRow?.operators ?? rawRow?.Operators ?? existingLine?.operators ?? 32) || 0
+  const helpers =
+    Number(rawRow?.helpers ?? rawRow?.Helpers ?? existingLine?.helpers ?? 6) || 0
+  const targetEfficiency =
     Number(
-      rawRow?.dailyTarget ??
-      rawRow?.Daily_Target ??
-      rawRow?.target ??
-      existingLine?.dailyTarget ??
-      1400
-    ) || 1400
+      rawRow?.targetEfficiency ??
+        rawRow?.Target_Efficiency ??
+        rawRow?.target_efficiency ??
+        existingLine?.targetEfficiency ??
+        75
+    ) || 75
 
   const activeHourIndex =
     Number(rawRow?.activeHourIndex ?? existingLine?.activeHourIndex ?? 6) || 6
@@ -1269,7 +1410,22 @@ function mapSheetRowToLine(rawRow, fallbackIdx = 0, existingLine = null) {
       ? normalizeLineRows(rawRow.hourlyRows, fallbackIdx)
       : existingLine?.hourlyRows?.length
         ? normalizeLineRows(existingLine.hourlyRows, fallbackIdx)
-        : buildHourlyRows(dailyTarget, activeHourIndex, fallbackIdx)
+        : buildHourlyRows(0, activeHourIndex, fallbackIdx, {
+            smv,
+            operators,
+            helpers,
+            targetEfficiency
+          })
+
+  const computedDailyTarget = hourlyRows.reduce((s, r) => s + (Number(r.target) || 0), 0)
+  const dailyTarget =
+    Number(
+      rawRow?.dailyTarget ??
+        rawRow?.Daily_Target ??
+        rawRow?.target ??
+        existingLine?.dailyTarget ??
+        computedDailyTarget
+    ) || computedDailyTarget || 1400
 
   const actualSum = hourlyRows.reduce((s, r) => s + (Number(r.actual) || 0), 0)
 
@@ -1283,11 +1439,15 @@ function mapSheetRowToLine(rawRow, fallbackIdx = 0, existingLine = null) {
     ).trim(),
     Shift_Start_time: String(
       rawRow?.Shift_Start_time ??
-      existingLine?.Shift_Start_time ??
-      shiftConfig.value.Shift_Start_time
+        existingLine?.Shift_Start_time ??
+        shiftConfig.value.Shift_Start_time
     ).trim(),
     submissionDate: toDateKey(
-      rawRow?.submissionDate ?? rawRow?.date ?? existingLine?.submissionDate ?? submissionDate.value
+      rawRow?.submissionDate ??
+        rawRow?.Setup_Date ??
+        rawRow?.date ??
+        existingLine?.submissionDate ??
+        submissionDate.value
     ),
     lineName: lineLabel,
     isActive:
@@ -1296,35 +1456,31 @@ function mapSheetRowToLine(rawRow, fallbackIdx = 0, existingLine = null) {
         : rawRow?.Status
           ? String(rawRow.Status).toLowerCase() !== 'deactive'
           : existingLine?.isActive !== false,
-    poNo: String(rawRow?.poNo ?? rawRow?.PO_No ?? existingLine?.poNo ?? '').trim(),
+    poNo: String(rawRow?.poNo ?? rawRow?.PO_No ?? rawRow?.Po_no ?? existingLine?.poNo ?? '').trim(),
     styleNo,
     itemName: String(
       rawRow?.itemName ??
-      rawRow?.Item_name ??
-      rawRow?.Item_Name ??
-      existingLine?.itemName ??
-      inferItemName(styleNo)
+        rawRow?.Item_name ??
+        rawRow?.Item_Name ??
+        rawRow?.item ??
+        existingLine?.itemName ??
+        inferItemName(styleNo)
     ).trim(),
     modelNo: String(
       rawRow?.modelNo ?? rawRow?.Model_No ?? existingLine?.modelNo ?? 'MOD-ALPHA-V2'
     ).trim(),
     buyer: String(
-      rawRow?.buyer ?? rawRow?.Buyer ?? existingLine?.buyer ?? BUYERS[fallbackIdx % BUYERS.length]
+      rawRow?.buyer ??
+        rawRow?.Buyer ??
+        rawRow?.Factory_Name ??
+        existingLine?.buyer ??
+        BUYERS[fallbackIdx % BUYERS.length]
     ).trim(),
-    smv: Number(rawRow?.smv ?? rawRow?.SMV ?? existingLine?.smv ?? 14.0) || 14.0,
-    operators:
-      Number(rawRow?.operators ?? rawRow?.Operators ?? existingLine?.operators ?? 32) || 0,
-    helpers:
-      Number(rawRow?.helpers ?? rawRow?.Helpers ?? existingLine?.helpers ?? 6) || 0,
+    smv,
+    operators,
+    helpers,
     dailyTarget,
-    targetEfficiency:
-      Number(
-        rawRow?.targetEfficiency ??
-        rawRow?.Target_Efficiency ??
-        rawRow?.target_efficiency ??
-        existingLine?.targetEfficiency ??
-        75
-      ) || 75,
+    targetEfficiency,
     maxLineGap: Number(rawRow?.maxLineGap ?? existingLine?.maxLineGap ?? 60) || 60,
     firstMachineTotal:
       Number(
@@ -1346,7 +1502,7 @@ async function fetchUnitLinesFromApi({ silent = false } = {}) {
       (r) =>
         r &&
         (String(r.Unit || r.unit || '').trim() ||
-          String(r.Line_No || r.line_no || r.lineName || '').trim())
+          String(r.Line_No || r.line_no || r.lineName || r.Line || '').trim())
     )
 
     if (validRows.length === 0) {
@@ -1363,9 +1519,11 @@ async function fetchUnitLinesFromApi({ silent = false } = {}) {
     const byLabel = new Map(linesData.value.map((l) => [String(l.lineName).toLowerCase(), l]))
 
     linesData.value = validRows.map((row, idx) => {
-      const candidateLabel = String(row.Line_No ?? row.line_no ?? row.lineName ?? '').trim()
+      const candidateLabel = String(
+        row.Line_No ?? row.line_no ?? row.lineName ?? row.Line ?? ''
+      ).trim()
       const candidateId = String(
-        row.id ?? row.ID ?? normalizeLineIdFromLabel(candidateLabel, idx)
+        row.id ?? row.ID ?? existingIdOrFallback(byId, byLabel, candidateLabel, idx)
       ).trim()
       const existing = byId.get(candidateId) || byLabel.get(candidateLabel.toLowerCase()) || null
       return mapSheetRowToLine(row, idx, existing)
@@ -1386,18 +1544,23 @@ async function fetchUnitLinesFromApi({ silent = false } = {}) {
   }
 }
 
+function existingIdOrFallback(byId, byLabel, candidateLabel, idx) {
+  const existing = byId.get(candidateLabel) || byLabel.get(candidateLabel.toLowerCase())
+  return existing?.id || normalizeLineIdFromLabel(candidateLabel, idx)
+}
+
 function extractItemNameFromRow(row) {
   if (!row || typeof row !== 'object') return ''
   return String(
     row.Item_name ??
-    row.Item_Name ??
-    row.itemName ??
-    row.item_name ??
-    row.Item ??
-    row.item ??
-    row.Name ??
-    row.name ??
-    ''
+      row.Item_Name ??
+      row.itemName ??
+      row.item_name ??
+      row.Item ??
+      row.item ??
+      row.Name ??
+      row.name ??
+      ''
   ).trim()
 }
 
@@ -1456,6 +1619,53 @@ async function fetchItemsFromApi({ silent = true } = {}) {
   }
 }
 
+async function postLineSettingBulkSave({
+  unit,
+  date,
+  factoryName = DEFAULT_FACTORY_NAME,
+  recalcHourlyTargets = false,
+  lines = []
+}) {
+  if (BACKEND_URL) {
+    const res = await fetch(BACKEND_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        action: 'bulkSave',
+        sheet: LINESETTING_SHEET_NAME,
+        unit,
+        date,
+        factoryName,
+        recalcHourlyTargets,
+        lines
+      })
+    })
+    const data = await parseJsonSafely(res)
+    if (data.success === false || data.ok === false) {
+      throw new Error(data.error || 'bulkSave failed')
+    }
+    return data
+  }
+
+  const creator =
+    LineSetting?.bulkSave ||
+    LineSetting?.createRecord ||
+    LineSetting?.addRecord ||
+    LineSetting?.insertRecord
+  if (typeof creator === 'function') {
+    return await creator.call(LineSetting, LINESETTING_SHEET_NAME, {
+      action: 'bulkSave',
+      unit,
+      date,
+      factoryName,
+      recalcHourlyTargets,
+      lines
+    })
+  }
+
+  return null
+}
+
 async function sendToGasBackend(action, payload, { silent = false } = {}) {
   if (!BACKEND_URL) return null
   try {
@@ -1471,8 +1681,8 @@ async function sendToGasBackend(action, payload, { silent = false } = {}) {
         displayMeta: currentDisplayMeta.value
       })
     })
-    const data = await res.json()
-    if (!data.ok) {
+    const data = await parseJsonSafely(res)
+    if (data.ok === false || data.success === false) {
       throw new Error(data.error || `Action ${action} failed`)
     }
     return data
@@ -1506,7 +1716,7 @@ async function manualSyncBoardToGas() {
       },
       { silent: false }
     )
-    if (res && res.ok) {
+    if (res && (res.ok || res.success)) {
       lastUpdated.value = new Date().toLocaleTimeString()
       notify(`Synced ${res.syncedLinesCount ?? linesData.value.length} lines to Sheet`)
     }
@@ -1608,6 +1818,23 @@ function onLineSelectChange(newLineId) {
 
 function createBlankUnitLineRow(unitName, lineName = '') {
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  const smv = 14.0
+  const operators = 32
+  const helpers = 6
+  const targetEfficiency = 75
+  const initialDailyTarget = BASE_HOURS.value.reduce(
+    (sum, slot, idx) =>
+      sum +
+      calcSlotTargetFromEfficiency(
+        operators,
+        helpers,
+        smv,
+        targetEfficiency,
+        getSlotMinutes(slot, idx === 0 ? FIRST_SLOT_OFFSET_MINUTES : 60)
+      ),
+    0
+  )
+
   return {
     rowUid: `xl-row-${suffix}`,
     lineId: '',
@@ -1616,11 +1843,11 @@ function createBlankUnitLineRow(unitName, lineName = '') {
     poNo: '',
     styleNo: '',
     itemName: itemOptions.value[0] || 'Apparel Item',
-    smv: 14.0,
-    operators: 32,
-    helpers: 6,
-    targetEfficiency: 75,
-    dailyTarget: 1400,
+    smv,
+    operators,
+    helpers,
+    targetEfficiency,
+    dailyTarget: initialDailyTarget || 1400,
     isNewRow: true
   }
 }
@@ -1633,6 +1860,24 @@ function ensureTrailingRowOnAdded(rowIdx) {
   if (rowIdx === popupDraft.value.lines.length - 1) {
     appendEmptyLineRow()
   }
+}
+
+function onPopupEfficiencyInputsChange(row) {
+  if (!row || !popupDraft.value.recalcHourlyTargets) return
+  const slots = BASE_HOURS.value
+  const total = slots.reduce(
+    (sum, slot, idx) =>
+      sum +
+      calcSlotTargetFromEfficiency(
+        row.operators,
+        row.helpers,
+        row.smv,
+        row.targetEfficiency,
+        getSlotMinutes(slot, idx === 0 ? FIRST_SLOT_OFFSET_MINUTES : 60)
+      ),
+    0
+  )
+  row.dailyTarget = total
 }
 
 function onGridLineDropdownChange(rowIdx, pickedLineId) {
@@ -1735,7 +1980,7 @@ function loadPopupForUnit(unitName) {
   popupDraft.value = {
     unit: resolvedUnit,
     date: submissionDate.value || toDateKey(new Date()),
-    recalcHourlyTargets: false,
+    recalcHourlyTargets: true,
     lines: buildUnitPopupRows(resolvedUnit)
   }
 }
@@ -1777,9 +2022,9 @@ function isRowPopulated(row) {
   if (!row) return false
   return Boolean(
     String(row.lineId || '').trim() ||
-    String(row.lineName || '').trim() ||
-    String(row.poNo || '').trim() ||
-    String(row.styleNo || '').trim()
+      String(row.lineName || '').trim() ||
+      String(row.poNo || '').trim() ||
+      String(row.styleNo || '').trim()
   )
 }
 
@@ -1790,8 +2035,8 @@ const popupTotals = computed(() => {
   const dailyTarget = rows.reduce((s, r) => s + (Number(r.dailyTarget) || 0), 0)
   const avgTargetEff = rows.length
     ? (
-      rows.reduce((s, r) => s + (Number(r.targetEfficiency) || 75), 0) / rows.length
-    ).toFixed(1)
+        rows.reduce((s, r) => s + (Number(r.targetEfficiency) || 75), 0) / rows.length
+      ).toFixed(1)
     : '75.0'
   return {
     totalLines: rows.length,
@@ -1803,12 +2048,17 @@ const popupTotals = computed(() => {
   }
 })
 
-function saveLinePopup() {
+async function saveLinePopup() {
   const targetUnit = String(popupDraft.value.unit || '').trim() || 'Unit-1'
   const targetDate = toDateKey(popupDraft.value.date || submissionDate.value)
   submissionDate.value = targetDate
 
   const populatedRows = popupDraft.value.lines.filter(isRowPopulated)
+  if (populatedRows.length === 0) {
+    notify('Please enter at least one line row before saving')
+    return
+  }
+
   const updatedLines = []
   const slots = BASE_HOURS.value
 
@@ -1823,7 +2073,22 @@ function saveLinePopup() {
     const cleanOperators = Math.max(0, Math.round(Number(draftRow.operators) || 0))
     const cleanHelpers = Math.max(0, Math.round(Number(draftRow.helpers) || 0))
     const cleanTargetEff = Math.max(1, Math.min(100, Number(draftRow.targetEfficiency) || 75))
-    const cleanTarget = Math.max(0, Math.round(Number(draftRow.dailyTarget) || 0))
+    const effDailySum = slots.reduce(
+      (sum, slot, idx) =>
+        sum +
+        calcSlotTargetFromEfficiency(
+          cleanOperators,
+          cleanHelpers,
+          cleanSmv,
+          cleanTargetEff,
+          getSlotMinutes(slot, idx === 0 ? FIRST_SLOT_OFFSET_MINUTES : 60)
+        ),
+      0
+    )
+    const cleanTarget =
+      popupDraft.value.recalcHourlyTargets || !Number(draftRow.dailyTarget)
+        ? effDailySum
+        : Math.max(0, Math.round(Number(draftRow.dailyTarget) || 0))
 
     let lineIdx = draftRow.lineId
       ? linesData.value.findIndex((l) => l.id === draftRow.lineId)
@@ -1862,7 +2127,17 @@ function saveLinePopup() {
         maxLineGap: 60,
         firstMachineTotal: 0,
         activeHourIndex: Math.min(6, Math.max(0, slots.length - 1)),
-        hourlyRows: buildHourlyRows(cleanTarget, Math.min(6, Math.max(0, slots.length - 1)), globalIdx)
+        hourlyRows: buildHourlyRows(
+          cleanTarget,
+          Math.min(6, Math.max(0, slots.length - 1)),
+          globalIdx,
+          {
+            smv: cleanSmv,
+            operators: cleanOperators,
+            helpers: cleanHelpers,
+            targetEfficiency: cleanTargetEff
+          }
+        )
       }
       linesData.value.push(line)
       lineIdx = linesData.value.length - 1
@@ -1883,16 +2158,23 @@ function saveLinePopup() {
     line.dailyTarget = cleanTarget
 
     if (popupDraft.value.recalcHourlyTargets) {
-      let remaining = cleanTarget
+      let sumTargets = 0
       line.hourlyRows.forEach((row, idx) => {
-        const slot = slots[idx] || { ratio: 1 / line.hourlyRows.length }
-        const isLast = idx === line.hourlyRows.length - 1
-        const nextTarget = isLast
-          ? Math.max(0, remaining)
-          : Math.round(cleanTarget * slot.ratio)
-        remaining -= nextTarget
+        const slot = slots[idx] || {}
+        const slotMins = getSlotMinutes(slot, idx === 0 ? FIRST_SLOT_OFFSET_MINUTES : 60)
+        const nextTarget = calcSlotTargetFromEfficiency(
+          cleanOperators,
+          cleanHelpers,
+          cleanSmv,
+          cleanTargetEff,
+          slotMins
+        )
         row.target = nextTarget
+        sumTargets += nextTarget
       })
+      if (sumTargets > 0) {
+        line.dailyTarget = sumTargets
+      }
     }
 
     updatedLines.push(JSON.parse(JSON.stringify(line)))
@@ -1900,30 +2182,59 @@ function saveLinePopup() {
 
   lastUpdated.value = new Date().toLocaleTimeString()
   isPopupOpen.value = false
-  notify(`${targetUnit} (${updatedLines.length} lines · ${targetDate}) saved`)
-  sendToGasBackend('syncBoardSnapshot', {
-    submissionDate: targetDate,
-    lines: updatedLines
-  })
+  isSavingLineSetting.value = true
+
+  try {
+    const bulkResult = await postLineSettingBulkSave({
+      unit: targetUnit,
+      date: targetDate,
+      factoryName: DEFAULT_FACTORY_NAME,
+      recalcHourlyTargets: Boolean(popupDraft.value.recalcHourlyTargets),
+      lines: updatedLines
+    })
+    notify(
+      bulkResult?.message ||
+        `${targetUnit} (${updatedLines.length} lines · ${targetDate}) saved`
+    )
+    await sendToGasBackend(
+      'syncBoardSnapshot',
+      {
+        submissionDate: targetDate,
+        shiftConfig: JSON.parse(JSON.stringify(shiftConfig.value)),
+        shiftRules: JSON.parse(JSON.stringify(shiftRules.value)),
+        lines: updatedLines
+      },
+      { silent: true }
+    )
+  } catch (err) {
+    notify(`Board updated · Sheet save error: ${err.message}`)
+  } finally {
+    isSavingLineSetting.value = false
+  }
 }
 
 async function stopQrCamera() {
   isCameraActive.value = false
   if (html5QrScanner) {
-    try {
-      if (html5QrScanner.isScanning) {
-        await html5QrScanner.stop()
-      }
-      await html5QrScanner.clear()
-    } catch (_) {
-      // Ignore cleanup errors if already stopped
-    }
+    const scannerRef = html5QrScanner
     html5QrScanner = null
+    try {
+      if (scannerRef.isScanning) {
+        await scannerRef.stop()
+      }
+      await scannerRef.clear()
+    } catch (_) {
+      // Ignore cleanup errors if already stopped or still starting
+    }
   }
 }
 
 async function startQrCamera() {
+  qrSessionCounter += 1
+  const currentSession = qrSessionCounter
   cameraError.value = ''
+
+  if (!isQrModalOpen.value || !isScanStepVisible.value) return
   if (!navigator?.mediaDevices?.getUserMedia) {
     cameraError.value = 'Camera API unavailable. Use HTTPS/localhost or type/scan manually.'
     return
@@ -1931,17 +2242,22 @@ async function startQrCamera() {
 
   await stopQrCamera()
   await nextTick()
+  if (currentSession !== qrSessionCounter || !isQrModalOpen.value || !isScanStepVisible.value) {
+    return
+  }
 
   const boxSize = Math.max(160, Math.min(220, viewportWidth.value - 96))
 
   try {
-    html5QrScanner = new Html5Qrcode('qr-camera-reader')
+    const scanner = new Html5Qrcode('qr-camera-reader')
+    html5QrScanner = scanner
     isCameraActive.value = true
 
-    await html5QrScanner.start(
+    await scanner.start(
       { facingMode: 'environment' },
       { fps: 10, qrbox: { width: boxSize, height: boxSize } },
       async (decodedText) => {
+        if (currentSession !== qrSessionCounter) return
         qrScanInput.value = decodedText
         await stopQrCamera()
         await confirmQrScan(decodedText)
@@ -1950,13 +2266,20 @@ async function startQrCamera() {
         // Ignore per-frame scan misses while searching
       }
     )
+
+    if (currentSession !== qrSessionCounter || !isQrModalOpen.value || !isScanStepVisible.value) {
+      await stopQrCamera()
+    }
   } catch (err) {
-    isCameraActive.value = false
-    cameraError.value = `Could not start camera: ${err?.message || 'Permission denied'}`
+    if (currentSession === qrSessionCounter) {
+      isCameraActive.value = false
+      cameraError.value = `Could not start camera: ${err?.message || 'Permission denied'}`
+    }
   }
 }
 
 async function resetQrFlowState(keepOption = false) {
+  qrSessionCounter += 1
   await stopQrCamera()
   cameraError.value = ''
   isScanStepVisible.value = false
@@ -2007,11 +2330,13 @@ async function openQrEntryPopup() {
 }
 
 async function closeQrEntryPopup() {
+  qrSessionCounter += 1
   isQrModalOpen.value = false
   await resetQrFlowState(false)
 }
 
 async function onQrOptionDropdownChange(optionKey) {
+  qrSessionCounter += 1
   await stopQrCamera()
   cameraError.value = ''
   selectedQrOption.value = optionKey
@@ -2036,6 +2361,7 @@ async function onQrOptionDropdownChange(optionKey) {
 async function handleOutputEntryChange() {
   if (!selectedQrOption.value) return
   if (!hasValidOutputEntry.value) {
+    qrSessionCounter += 1
     isScanStepVisible.value = false
     await stopQrCamera()
   }
@@ -2055,7 +2381,8 @@ async function openScanAfterOutput() {
   isQrScanned.value = false
   qrScanFeedback.value = `Output entered. Scan QR code now for ${activeOptionMeta.value?.label}.`
   await nextTick()
-  if (displayMode.value !== 'compact') {
+  if (!isQrModalOpen.value) return
+  if (displayMode.value === 'desktop' || displayMode.value === 'ultrawide') {
     qrScannerInputRef.value?.focus()
   }
   await startQrCamera()
@@ -2068,21 +2395,22 @@ function parseQrPayload(rawText) {
   const upper = clean.toUpperCase()
   let lineId = null
 
-  const lineMatch =
-    upper.match(/(?:LINE[\s:_-]*|L)(\d{1,2})\b/) ||
-    upper.match(/\b(3[0-3]|[12]\d|0?[1-9])\b/)
-
-  if (lineMatch) {
-    const num = Number(lineMatch[1])
-    if (num >= 1 && num <= 33) {
-      lineId = `line-${num}`
-    }
+  const explicitMatch = upper.match(/(?:\bLINE[\s:_-]*|\bL)(\d+)\b/)
+  if (explicitMatch) {
+    const num = Number(explicitMatch[1])
+    const matchedLine = linesData.value.find((line) => {
+      const nameMatch = String(line.lineName || '').toUpperCase().match(/(\d+)/)
+      const idMatch = String(line.id || '').toUpperCase().match(/(\d+)/)
+      return (nameMatch && Number(nameMatch[1]) === num) || (idMatch && Number(idMatch[1]) === num)
+    })
+    lineId = matchedLine?.id || `line-${num}`
   }
 
   return { raw: clean, lineId }
 }
 
 async function confirmQrScan(overrideCode = '') {
+  if (isProcessingQrScan) return
   if (!selectedQrOption.value) {
     qrScanFeedback.value = 'Please select an option first.'
     return
@@ -2098,42 +2426,55 @@ async function confirmQrScan(overrideCode = '') {
     return
   }
 
-  if (isCameraActive.value) {
-    await stopQrCamera()
+  isProcessingQrScan = true
+  try {
+    if (isCameraActive.value) {
+      await stopQrCamera()
+    }
+
+    const scanDate = new Date()
+    const scanTimeStr = scanDate.toLocaleTimeString()
+    const scanIsoStr = scanDate.toISOString()
+
+    const parsed = parseQrPayload(rawCode)
+    scannedQrCode.value = parsed?.raw || rawCode
+    scannedAtTime.value = scanTimeStr
+    scannedAtIso.value = scanIsoStr
+    isQrScanned.value = true
+
+    if (parsed?.lineId) {
+      qrEntryOut.value.lineId = parsed.lineId
+    }
+
+    const mappedSlotIdx = findSlotIndexForScanTime(
+      scanDate,
+      shiftConfig.value.Shift_Start_time || shiftConfig.value.startTime,
+      BASE_HOURS.value
+    )
+    qrEntryOut.value.hourIndex = mappedSlotIdx
+
+    const targetLineObj =
+      linesData.value.find((l) => l.id === qrEntryOut.value.lineId) || linesData.value[0]
+    scannedLineLabel.value = targetLineObj?.lineName || qrEntryOut.value.lineId
+
+    await insertScannedQrRecord(scanTimeStr, scanIsoStr)
+    if (isQrModalOpen.value) {
+      qrScanInput.value = ''
+    }
+  } finally {
+    isProcessingQrScan = false
   }
-
-  const scanDate = new Date()
-  const scanTimeStr = scanDate.toLocaleTimeString()
-  const scanIsoStr = scanDate.toISOString()
-
-  const parsed = parseQrPayload(rawCode)
-  scannedQrCode.value = parsed?.raw || rawCode
-  scannedAtTime.value = scanTimeStr
-  scannedAtIso.value = scanIsoStr
-  isQrScanned.value = true
-
-  if (parsed?.lineId) {
-    qrEntryOut.value.lineId = parsed.lineId
-  }
-
-  const mappedSlotIdx = findSlotIndexForScanTime(
-    scanDate,
-    shiftConfig.value.Shift_Start_time || shiftConfig.value.startTime,
-    BASE_HOURS.value
-  )
-  qrEntryOut.value.hourIndex = mappedSlotIdx
-
-  const targetLineObj =
-    linesData.value.find((l) => l.id === qrEntryOut.value.lineId) || linesData.value[0]
-  scannedLineLabel.value = targetLineObj?.lineName || qrEntryOut.value.lineId
-
-  insertScannedQrRecord(scanTimeStr, scanIsoStr)
 }
 
-function insertScannedQrRecord(scanTimeStr, scanIsoStr) {
+async function insertScannedQrRecord(scanTimeStr, scanIsoStr) {
+  if (!linesData.value.length) {
+    qrScanFeedback.value = `Scanned ${scannedQrCode.value} at ${scanTimeStr}, but no lines exist on the board.`
+    return
+  }
+
   const line = linesData.value.find((l) => l.id === qrEntryOut.value.lineId) || linesData.value[0]
-  if (!line) {
-    qrScanFeedback.value = `Scanned ${scannedQrCode.value} at ${scanTimeStr}, but no line was found.`
+  if (!line || !Array.isArray(line.hourlyRows) || line.hourlyRows.length === 0) {
+    qrScanFeedback.value = `Scanned ${scannedQrCode.value} at ${scanTimeStr}, but no hourly rows were found.`
     return
   }
 
@@ -2145,7 +2486,8 @@ function insertScannedQrRecord(scanTimeStr, scanIsoStr) {
     line.hourlyRows.length - 1
   )
   const row = line.hourlyRows[idx]
-  const qty = Math.max(1, Math.round(Number(qrEntryOut.value.qty) || 1))
+  const qty = Math.max(1, Math.round(Number(qrEntryOut.value.qty) || 0))
+  const qcAdd = Math.max(1, Math.round(Number(qrEntryOut.value.qcPass) || 0))
   const dhuVal = Math.max(0, Number(qrEntryOut.value.dhu) || 0)
 
   let logSummary = ''
@@ -2159,21 +2501,21 @@ function insertScannedQrRecord(scanTimeStr, scanIsoStr) {
   } else if (selectedQrOption.value === 'LAST_MC') {
     row.actual += qty
     row.dhu = dhuVal
-    const qcAdd = calcHourQcPass(qty, dhuVal)
-    row.qcPass = Math.min(row.actual, (Number(row.qcPass) || 0) + qcAdd)
+    const nextQcDelta = calcHourQcPass(qty, dhuVal)
+    row.qcPass = Math.min(row.actual, (Number(row.qcPass) || 0) + nextQcDelta)
     line.firstMachineTotal = Math.max(
       line.firstMachineTotal,
       line.hourlyRows.reduce((s, r) => s + r.actual, 0)
     )
-    logSummary = `Last M/C +${qty} pcs (+${qcAdd} QC) on ${resolvedLineName} (${row.hour}) · Scanned at ${scanTimeStr}`
-    historyBadge = `+${qty} Out / +${qcAdd} QC`
+    logSummary = `Last M/C +${qty} pcs (+${nextQcDelta} QC) on ${resolvedLineName} (${row.hour}) · Scanned at ${scanTimeStr}`
+    historyBadge = `+${qty} Out / +${nextQcDelta} QC`
   } else if (selectedQrOption.value === 'QC_PASS') {
-    const qcAdd = Math.max(1, Math.round(Number(qrEntryOut.value.qcPass) || qty))
     row.dhu = dhuVal
-    if (row.actual < (Number(row.qcPass) || 0) + qcAdd) {
-      row.actual = (Number(row.qcPass) || 0) + qcAdd
+    const nextQcTotal = (Number(row.qcPass) || 0) + qcAdd
+    if (Number(row.actual || 0) < nextQcTotal) {
+      row.actual = nextQcTotal
     }
-    row.qcPass = Math.min(row.actual, (Number(row.qcPass) || 0) + qcAdd)
+    row.qcPass = nextQcTotal
     line.firstMachineTotal = Math.max(
       line.firstMachineTotal,
       line.hourlyRows.reduce((s, r) => s + r.actual, 0)
@@ -2199,7 +2541,7 @@ function insertScannedQrRecord(scanTimeStr, scanIsoStr) {
 
   notify(logSummary)
 
-  sendToGasBackend('saveQrEntry', {
+  await sendToGasBackend('saveQrEntry', {
     optionKey: selectedQrOption.value,
     optionLabel: activeOptionMeta.value?.label || selectedQrOption.value,
     qrCode: scannedQrCode.value,
@@ -2210,7 +2552,7 @@ function insertScannedQrRecord(scanTimeStr, scanIsoStr) {
     unit: line.unit,
     hourIndex: idx,
     hour: row.hour,
-    qty,
+    qty: selectedQrOption.value === 'QC_PASS' ? qcAdd : qty,
     qcPass: row.qcPass,
     dhu: row.dhu,
     station: qrEntryOut.value.station,
@@ -2239,7 +2581,11 @@ function onHourlyActualChange(line, rowIndex) {
   if (!row) return
   const cleanActual = Math.max(0, Math.round(Number(row.actual) || 0))
   row.actual = cleanActual
-  row.qcPass = calcHourQcPass(cleanActual, row.dhu)
+  if (cleanActual === 0) {
+    row.qcPass = 0
+  } else if ((Number(row.qcPass) || 0) > cleanActual) {
+    row.qcPass = cleanActual
+  }
   lastUpdated.value = new Date().toLocaleTimeString()
   syncHourlyRowToGas(line, rowIndex)
 }
@@ -2259,64 +2605,82 @@ function onHourlyDowntimeChange(line, rowIndex) {
   if (!row) return
   const cleanMins = Math.max(0, Number(row.downtimeMin) || 0)
   row.downtimeMin = cleanMins
+
   if (cleanMins === 0) {
     row.nptProblems = []
+  } else if (Array.isArray(row.nptProblems) && row.nptProblems.length > 0) {
+    const currentSum = row.nptProblems.reduce((s, p) => s + (Number(p.minutes) || 0), 0)
+    if (currentSum !== cleanMins) {
+      const diff = cleanMins - currentSum
+      const lastIdx = row.nptProblems.length - 1
+      const updatedLast = Math.max(
+        0,
+        (Number(row.nptProblems[lastIdx].minutes) || 0) + diff
+      )
+      if (updatedLast === 0) {
+        row.nptProblems = [
+          { problem: row.nptProblems[0].problem || 'MACHINE PROBLEM', minutes: cleanMins }
+        ]
+      } else {
+        row.nptProblems[lastIdx].minutes = updatedLast
+      }
+    }
   } else {
     const probName =
-      row.nptProblems?.[0]?.problem ||
       NPT_PROBLEM_TYPES[(rowIndex + 1) % NPT_PROBLEM_TYPES.length]
     row.nptProblems = [{ problem: probName, minutes: cleanMins }]
   }
+
   lastUpdated.value = new Date().toLocaleTimeString()
   syncHourlyRowToGas(line, rowIndex)
+}
+
+function clampHourlyInput(line, rowIndex, field) {
+  const row = line?.hourlyRows?.[rowIndex]
+  if (!row) return
+  if (field === 'actual') {
+    row.actual = Math.max(0, Math.round(Number(row.actual) || 0))
+    if ((Number(row.qcPass) || 0) > row.actual) {
+      row.qcPass = row.actual
+    }
+  } else if (field === 'qcPass') {
+    const maxQc = Math.max(0, Math.round(Number(row.actual) || 0))
+    row.qcPass = Math.min(maxQc, Math.max(0, Math.round(Number(row.qcPass) || 0)))
+  } else if (field === 'downtimeMin') {
+    row.downtimeMin = Math.max(0, Number(row.downtimeMin) || 0)
+  }
 }
 
 function computeLineMetrics(line, index = 0) {
   const isActive = line.isActive !== false
   const hourlyRows = Array.isArray(line.hourlyRows) ? line.hourlyRows : []
   const smv = Number(line.smv) || 14.0
-  const dailyTarget = Number(line.dailyTarget) || 0
+  const hourlyRowsTargetSum = hourlyRows.reduce((sum, r) => sum + (Number(r.target) || 0), 0)
+  const dailyTarget =
+    hourlyRowsTargetSum > 0 ? hourlyRowsTargetSum : Number(line.dailyTarget) || 0
 
-  const activeDateKey = toDateKey(
-    line.submissionDate || line.date || submissionDate.value || new Date()
-  )
-  const lineSection = line.section || line.unit || ''
-  const lineShift = line.Shift || shiftConfig.value.Shift
-  const matchedRule = resolveMatchingShiftRule({
-    date: activeDateKey,
-    section: lineSection,
-    shift: lineShift,
-    startTime: line.Shift_Start_time || null
-  })
-
-  const effectiveStartLabel = String(
-    matchedRule?.Shift_Start_time ||
-    line.Shift_Start_time ||
-    shiftConfig.value.Shift_Start_time ||
-    shiftConfig.value.startTime ||
-    '08:00'
-  ).trim()
-  const ruleStartMin = parseFlexibleTimeToMinutes(effectiveStartLabel, 8 * 60)
-  const ruleHours = getConfiguredDurationHours(
-    matchedRule?.durationHours || shiftConfig.value.durationHours
-  )
-  const ruleSlots = buildShiftSlotsFromStartPlus80Min(
-    formatMinutesToHHMM(ruleStartMin),
-    ruleHours,
-    matchedRule?.Shift || lineShift,
-    matchedRule?.id || shiftConfig.value.id,
-    matchedRule?.create_at || shiftConfig.value.create_at,
-    null,
+  const {
+    activeDateKey,
+    lineSection,
+    lineShift,
+    matchedRule,
     effectiveStartLabel,
-    activeDateKey
-  )
+    cleanRuleStart,
+    ruleSlots
+  } = getLineShiftContext(line, submissionDate.value)
 
-  const activeIdx = matchedRule
-    ? findSlotIndexForScanTime(new Date(), formatMinutesToHHMM(ruleStartMin), ruleSlots)
-    : Math.min(
-      Math.max(0, Number(line.activeHourIndex) || 0),
-      Math.max(0, hourlyRows.length - 1)
-    )
+  const activeIdx =
+    hourlyRows.length === 0
+      ? 0
+      : matchedRule
+        ? Math.min(
+            hourlyRows.length - 1,
+            findSlotIndexForScanTime(new Date(), cleanRuleStart, ruleSlots)
+          )
+        : Math.min(
+            Math.max(0, Number(line.activeHourIndex) || 0),
+            hourlyRows.length - 1
+          )
 
   const totalActual = hourlyRows.reduce((sum, r) => sum + (Number(r.actual) || 0), 0)
   const totalQcPass = hourlyRows.reduce((sum, r) => {
@@ -2353,8 +2717,9 @@ function computeLineMetrics(line, index = 0) {
     ? Math.min(100, Math.round((totalActual / effectiveDailyTarget) * 100))
     : 0
 
-  const activeHoursCount = activeIdx + 1
-  const totalAvailableMins = activeHoursCount * totalManpower * 60
+  const slotsForCalc = ruleSlots.length ? ruleSlots : BASE_HOURS.value
+  const elapsedSlotMins = getElapsedSlotMinutes(slotsForCalc, activeIdx)
+  const totalAvailableMins = elapsedSlotMins * totalManpower
   const totalEarnedMins = totalActual * smv
   const nptPctStr =
     isActive && totalAvailableMins
@@ -2477,8 +2842,13 @@ function buildUnitSubtotalRow(unitName, unitLines) {
   let earnedMins = 0
   let availableMins = 0
   activeUnitLines.forEach((l) => {
+    const ctx = getLineShiftContext(l, submissionDate.value)
+    const elapsedMins = getElapsedSlotMinutes(
+      ctx.ruleSlots.length ? ctx.ruleSlots : BASE_HOURS.value,
+      l.activeHourIndex
+    )
     earnedMins += l.totalActual * l.smv
-    availableMins += (l.activeHourIndex + 1) * l.totalManpower * 60
+    availableMins += elapsedMins * l.totalManpower
   })
   const effNum = availableMins ? Number(((earnedMins / availableMins) * 100).toFixed(1)) : 0
   const completionPct = dailyTargetSum
@@ -2486,11 +2856,11 @@ function buildUnitSubtotalRow(unitName, unitLines) {
     : 0
   const targetEffAvg = lineCount
     ? Number(
-      (
-        activeUnitLines.reduce((s, l) => s + (Number(l.targetEfficiency) || 75), 0) /
-        lineCount
-      ).toFixed(1)
-    )
+        (
+          activeUnitLines.reduce((s, l) => s + (Number(l.targetEfficiency) || 75), 0) /
+          lineCount
+        ).toFixed(1)
+      )
     : 75
 
   return {
@@ -2590,6 +2960,7 @@ const computedRows = computed(() => {
   const line = currentLine.value
   if (!line || !currentLineMetrics.value) return []
   const manpower = currentLineMetrics.value.totalManpower
+  const slots = BASE_HOURS.value
   let cumulativeTarget = 0
   let cumulativeActual = 0
   let cumulativeQcPass = 0
@@ -2617,7 +2988,8 @@ const computedRows = computed(() => {
     const hourGap = Math.max(0, estFirstMachineHour - cleanActual)
 
     const variance = cleanActual - row.target
-    const availableMins = manpower * 60
+    const slotMins = getSlotMinutes(slots[idx], idx === 0 ? FIRST_SLOT_OFFSET_MINUTES : 60)
+    const availableMins = manpower * slotMins
     const earnedMins = cleanActual * line.smv
     const efficiency =
       cleanActual > 0 && availableMins > 0
@@ -2731,8 +3103,13 @@ const overallEfficiency = computed(() => {
   let earned = 0
   let available = 0
   activeScopedMetrics.value.forEach((l) => {
+    const ctx = getLineShiftContext(l, submissionDate.value)
+    const elapsedMins = getElapsedSlotMinutes(
+      ctx.ruleSlots.length ? ctx.ruleSlots : BASE_HOURS.value,
+      l.activeHourIndex
+    )
     earned += l.totalActual * l.smv
-    available += (l.activeHourIndex + 1) * l.totalManpower * 60
+    available += elapsedMins * l.totalManpower
   })
   return available ? ((earned / available) * 100).toFixed(1) : '0.0'
 })
@@ -2770,7 +3147,10 @@ function getActiveScopeTargets() {
 
 function addFirstMachinePieces(lineId, qty) {
   const line = linesData.value.find((l) => l.id === lineId)
-  if (!line) return
+  if (!line) {
+    notify('No active line found')
+    return
+  }
   const lineActual = line.hourlyRows.reduce((s, r) => s + r.actual, 0)
   line.firstMachineTotal = Math.max(lineActual, line.firstMachineTotal + qty)
   lastUpdated.value = new Date().toLocaleTimeString()
@@ -2780,7 +3160,10 @@ function addFirstMachinePieces(lineId, qty) {
 
 function addPieces(lineId, hourIndex, qty) {
   const line = linesData.value.find((l) => l.id === lineId)
-  if (!line) return
+  if (!line) {
+    notify('No active line found')
+    return
+  }
   const row = line.hourlyRows[hourIndex]
   if (!row) return
   const nextVal = Math.max(0, row.actual + qty)
@@ -2826,7 +3209,10 @@ function advanceHour() {
 
 function resetShift() {
   isLiveSimulating.value = false
-  clearInterval(simTimer)
+  if (simTimer) {
+    clearInterval(simTimer)
+    simTimer = null
+  }
   const targets = getActiveScopeTargets()
   targets.forEach((line) => {
     line.activeHourIndex = 0
@@ -2851,6 +3237,7 @@ function resetShift() {
 function toggleSimulation() {
   isLiveSimulating.value = !isLiveSimulating.value
   if (isLiveSimulating.value) {
+    if (simTimer) clearInterval(simTimer)
     notify('Live feed active')
     simTimer = setInterval(() => {
       const targets = getActiveScopeTargets()
@@ -2885,7 +3272,10 @@ function toggleSimulation() {
       lastUpdated.value = new Date().toLocaleTimeString()
     }, 1800)
   } else {
-    clearInterval(simTimer)
+    if (simTimer) {
+      clearInterval(simTimer)
+      simTimer = null
+    }
     notify('Live feed paused')
     sendToGasBackend(
       'syncBoardSnapshot',
@@ -2919,10 +3309,18 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  qrSessionCounter += 1
+  if (isLiveSimulating.value && linesData.value.length > 0) {
+    sendToGasBackend(
+      'syncBoardSnapshot',
+      { lines: JSON.parse(JSON.stringify(linesData.value)) },
+      { silent: true }
+    )
+  }
   stopQrCamera()
-  clearInterval(simTimer)
-  clearTimeout(toastTimer)
-  clearInterval(clockTimer)
+  if (simTimer) clearInterval(simTimer)
+  if (toastTimer) clearTimeout(toastTimer)
+  if (clockTimer) clearInterval(clockTimer)
   window.removeEventListener('resize', updateViewportSize)
   window.removeEventListener('orientationchange', updateViewportSize)
   window.removeEventListener('keydown', handleGlobalKeydown)
@@ -3073,375 +3471,391 @@ onUnmounted(() => {
     </header>
 
     <!-- Shift Control Settings Modal -->
-    <div v-if="isShiftModalOpen" class="modal-backdrop" role="dialog" aria-modal="true"
-      aria-labelledby="shift-control-modal-title" @click.self="closeShiftControlModal">
-      <div class="modal-card shift-modal-card">
-        <div class="modal-head">
-          <div>
-            <span id="shift-control-modal-title" class="modal-badge shift-modal-badge">
-              SHIFT CONTROL
-            </span>
+    <Teleport to="body">
+      <div v-if="isShiftModalOpen" class="modal-backdrop" role="dialog" aria-modal="true"
+        aria-labelledby="shift-control-modal-title" @click.self="closeShiftControlModal">
+        <div class="modal-card shift-modal-card">
+          <div class="modal-head">
+            <div>
+              <span id="shift-control-modal-title" class="modal-badge shift-modal-badge">
+                SHIFT CONTROL
+              </span>
+            </div>
+            <button type="button" class="modal-close-btn" aria-label="Close shift control popup"
+              @click="closeShiftControlModal">
+              ✕
+            </button>
           </div>
-          <button type="button" class="modal-close-btn" aria-label="Close shift control popup"
-            @click="closeShiftControlModal">
-            ✕
-          </button>
+
+          <form class="modal-form" @submit.prevent="saveShiftControl">
+            <div class="shift-date-bar">
+              <label class="shift-date-label">
+                <span>DATE:</span>
+                <input v-model="submissionDate" type="date" class="shift-date-input" required />
+              </label>
+            </div>
+
+            <div class="shift-slots-table-wrap">
+              <table class="shift-slots-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>SECTION</th>
+                    <th>SHIFT</th>
+                    <th>SHIFT_START_TIME</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(slot, sIdx) in shiftDraft.slots" :key="slot._uid || slot.id || sIdx">
+                    <td class="xl-row-num">{{ sIdx + 1 }}</td>
+                    <td class="xl-cell">
+                      <select :value="slot.section" :aria-label="`Select section for row ${sIdx + 1}`"
+                        class="xl-select" @change="onShiftSectionChange(sIdx, $event.target.value)">
+                        <option value="">-- Select section --</option>
+                        <option v-for="sec in SHIFT_SECTION_OPTIONS" :key="sec" :value="sec">
+                          {{ sec }}
+                        </option>
+                      </select>
+                    </td>
+                    <td class="xl-cell">
+                      <select :value="slot.Shift || shiftDraft.Shift" :aria-label="`Shift for row ${sIdx + 1}`"
+                        class="xl-select" @change="onShiftDropdownChange(sIdx, $event.target.value)">
+                        <option v-for="preset in SHIFT_PRESETS" :key="preset.key" :value="preset.label">
+                          {{ preset.label }}
+                        </option>
+                      </select>
+                    </td>
+                    <td class="xl-cell">
+                      <input :value="slot.Shift_Start_time" type="text" placeholder="e.g. 6 AM or 1PM"
+                        :aria-label="`Shift start time for row ${sIdx + 1}`" class="xl-input"
+                        @input="onSlotStartTimeTyping(slot, sIdx, $event.target.value)"
+                        @change="onSlotStartTimeChange(slot, sIdx, $event.target.value)" />
+                    </td>
+                    <td class="xl-cell shift-preview-cell">
+                      <button type="button" class="btn-icon-remove" aria-label="Remove shift row"
+                        @click="removeShiftSlot(sIdx)">
+                        ✕
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="modal-footer">
+              <button type="button" class="btn btn-outline" @click="closeShiftControlModal">
+                Cancel
+              </button>
+              <button type="submit" class="btn btn-primary" :disabled="isSavingShift">
+                {{ isSavingShift ? 'Saving...' : 'Save Shift Config' }}
+              </button>
+            </div>
+          </form>
         </div>
-
-        <form class="modal-form" @submit.prevent="saveShiftControl">
-          <div class="shift-date-bar">
-            <label class="shift-date-label">
-              <span>DATE:</span>
-              <input v-model="submissionDate" type="date" class="shift-date-input" required />
-            </label>
-          </div>
-
-          <div class="shift-slots-table-wrap">
-            <table class="shift-slots-table">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>SECTION</th>
-                  <th>SHIFT</th>
-                  <th>SHIFT_START_TIME</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="(slot, sIdx) in shiftDraft.slots" :key="slot._uid || slot.id || sIdx">
-                  <td class="xl-row-num">{{ sIdx + 1 }}</td>
-                  <td class="xl-cell">
-                    <select :value="slot.section" aria-label="Select section" class="xl-select"
-                      @change="onShiftSectionChange(sIdx, $event.target.value)">
-                      <option value="">-- Select section --</option>
-                      <option v-for="sec in SHIFT_SECTION_OPTIONS" :key="sec" :value="sec">
-                        {{ sec }}
-                      </option>
-                    </select>
-                  </td>
-                  <td class="xl-cell">
-                    <select :value="slot.Shift || shiftDraft.Shift" aria-label="Row Shift" class="xl-select"
-                      @change="onShiftDropdownChange(sIdx, $event.target.value)">
-                      <option v-for="preset in SHIFT_PRESETS" :key="preset.key" :value="preset.label">
-                        {{ preset.label }}
-                      </option>
-                    </select>
-                  </td>
-                  <td class="xl-cell">
-                    <input :value="slot.Shift_Start_time" type="text" placeholder="e.g. 6 AM or 1PM"
-                      aria-label="Shift start time" class="xl-input"
-                      @input="onSlotStartTimeTyping(slot, sIdx, $event.target.value)"
-                      @change="onSlotStartTimeChange(slot, sIdx, $event.target.value)" />
-                  </td>
-                  <td class="xl-cell shift-preview-cell">
-                    <button type="button" class="btn-icon-remove" aria-label="Remove shift row"
-                      @click="removeShiftSlot(sIdx)">
-                      ✕
-                    </button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
-          <div class="modal-footer">
-            <button type="button" class="btn btn-outline" @click="closeShiftControlModal">
-              Cancel
-            </button>
-            <button type="submit" class="btn btn-primary" :disabled="isSavingShift">
-              {{ isSavingShift ? 'Saving...' : 'Save Shift Config' }}
-            </button>
-          </div>
-        </form>
       </div>
-    </div>
+    </Teleport>
 
     <!-- Single-Unit Header + Excel Grid Table Popup Modal -->
-    <div v-if="isPopupOpen" class="modal-backdrop" role="dialog" aria-modal="true"
-      aria-labelledby="line-setup-popup-title" @click.self="closeLinePopup">
-      <div class="modal-card unit-popup-card">
-        <div class="modal-head">
-          <div>
-            <span class="modal-badge">UNIT → LINE ENTRY</span>
-            <span id="line-setup-popup-title" class="xl-sheet-tab">
-              {{ popupDraft.unit }} · Line Setup Sheet
-            </span>
+    <Teleport to="body">
+      <div v-if="isPopupOpen" class="modal-backdrop" role="dialog" aria-modal="true"
+        aria-labelledby="line-setup-popup-title" @click.self="closeLinePopup">
+        <div class="modal-card unit-popup-card">
+          <div class="modal-head">
+            <div>
+              <span class="modal-badge">UNIT → LINE ENTRY</span>
+              <span id="line-setup-popup-title" class="xl-sheet-tab">
+                {{ popupDraft.unit }} · Line Setup Sheet
+              </span>
+            </div>
+            <button type="button" class="modal-close-btn" aria-label="Close popup" @click="closeLinePopup">
+              ✕
+            </button>
           </div>
-          <button type="button" class="modal-close-btn" aria-label="Close popup" @click="closeLinePopup">
-            ✕
-          </button>
-        </div>
 
-        <form class="modal-form" @submit.prevent="saveLinePopup">
-          <div class="popup-unit-head-bar">
-            <label class="field-group popup-unit-select-wrap">
-              <span class="popup-unit-label">Unit:-</span>
-              <select :value="popupDraft.unit" class="form-select popup-unit-select"
-                @change="onPopupUnitChange($event.target.value)">
-                <option v-for="u in unitOptions" :key="u" :value="u">
-                  {{ u }}
+          <form class="modal-form" @submit.prevent="saveLinePopup">
+            <div class="popup-unit-head-bar">
+              <label class="field-group popup-unit-select-wrap">
+                <span class="popup-unit-label">Unit:-</span>
+                <select :value="popupDraft.unit" class="form-select popup-unit-select"
+                  @change="onPopupUnitChange($event.target.value)">
+                  <option v-for="u in unitOptions" :key="u" :value="u">
+                    {{ u }}
+                  </option>
+                </select>
+              </label>
+              <label class="field-group popup-unit-select-wrap">
+                <span class="popup-unit-label">Date:-</span>
+                <input v-model="popupDraft.date" type="date" class="form-input popup-unit-date" />
+              </label>
+
+              <div class="popup-unit-meta">
+                <span class="unit-badge unit-badge-sm">{{ popupDraft.unit }}</span>
+                <span class="muted-sm">
+                  {{ popupUnitLineChoices.length }} Lines in {{ popupDraft.unit }} ·
+                  Entered: <strong>{{ popupTotals.totalLines }}</strong> ·
+                  Target Eff <strong>{{ popupTotals.avgTargetEff }}%</strong> ·
+                  <strong>{{ popupTotals.manpower }}</strong> Manpower ·
+                  <strong>{{ popupTotals.dailyTarget.toLocaleString() }}</strong> pcs
+                </span>
+              </div>
+            </div>
+
+            <div class="xl-formula-bar">
+              <span class="xl-name-box">fx</span>
+              <span class="xl-formula-text">
+                =SUM({{ popupDraft.unit }}) · Rows: <strong>{{ popupTotals.totalLines }}</strong> ·
+                Avg Eff: <strong>{{ popupTotals.avgTargetEff }}%</strong> ·
+                Manpower:
+                <strong>{{ popupTotals.operators }} Op + {{ popupTotals.helpers }} Hlp =
+                  {{ popupTotals.manpower }}</strong>
+                · Target: <strong>{{ popupTotals.dailyTarget.toLocaleString() }} pcs</strong>
+              </span>
+            </div>
+
+            <div class="excel-sheet-wrap">
+              <table ref="excelGridRef" class="excel-sheet-table" role="grid">
+                <thead>
+                  <tr>
+                    <th class="xl-corner-th">#</th>
+                    <th>Line ({{ popupDraft.unit }})</th>
+                    <th>PO No</th>
+                    <th>Style</th>
+                    <th>Item</th>
+                    <th>SMV</th>
+                    <th>Op</th>
+                    <th>Hlp</th>
+                    <th>Target Eff %</th>
+                    <th>Target</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(row, rIdx) in popupDraft.lines" :key="row.rowUid" class="xl-data-row">
+                    <td class="xl-row-num">{{ rIdx + 1 }}</td>
+                    <td class="xl-cell">
+                      <select :value="row.lineId" aria-label="Select Line under Unit" class="xl-select xl-w-line"
+                        @change="onGridLineDropdownChange(rIdx, $event.target.value)"
+                        @keydown="handleExcelGridKeydown($event, rIdx, 0)">
+                        <option value="">-- Select Line --</option>
+                        <option v-for="opt in popupUnitLineChoices" :key="opt.id" :value="opt.id">
+                          {{ opt.lineName }}
+                        </option>
+                      </select>
+                    </td>
+                    <td class="xl-cell">
+                      <input v-model="row.poNo" type="text" class="xl-input xl-w-po" placeholder="PO-44102"
+                        @keydown="handleExcelGridKeydown($event, rIdx, 1)" />
+                    </td>
+                    <td class="xl-cell">
+                      <input v-model="row.styleNo" type="text" class="xl-input xl-w-style" placeholder="STY-7710-WVN"
+                        @keydown="handleExcelGridKeydown($event, rIdx, 2)" />
+                    </td>
+                    <td class="xl-cell">
+                      <select v-model="row.itemName" aria-label="Item Name" class="xl-select xl-w-item"
+                        @keydown="handleExcelGridKeydown($event, rIdx, 3)">
+                        <option v-for="item in getRowItemChoices(row)" :key="item" :value="item">
+                          {{ item }}
+                        </option>
+                      </select>
+                    </td>
+                    <td class="xl-cell">
+                      <input v-model.number="row.smv" type="number" inputmode="decimal" min="0.1" step="0.1"
+                        class="xl-input xl-num xl-w-smv"
+                        @input="onPopupEfficiencyInputsChange(row)"
+                        @keydown="handleExcelGridKeydown($event, rIdx, 4)" />
+                    </td>
+                    <td class="xl-cell">
+                      <input v-model.number="row.operators" type="number" inputmode="numeric" min="0" step="1"
+                        class="xl-input xl-num xl-w-op"
+                        @input="onPopupEfficiencyInputsChange(row)"
+                        @keydown="handleExcelGridKeydown($event, rIdx, 5)" />
+                    </td>
+                    <td class="xl-cell">
+                      <input v-model.number="row.helpers" type="number" inputmode="numeric" min="0" step="1"
+                        class="xl-input xl-num xl-w-hlp"
+                        @input="onPopupEfficiencyInputsChange(row)"
+                        @keydown="handleExcelGridKeydown($event, rIdx, 6)" />
+                    </td>
+                    <td class="xl-cell">
+                      <input v-model.number="row.targetEfficiency" type="number" inputmode="decimal" min="0" max="100"
+                        step="any" class="xl-input xl-num xl-w-eff"
+                        @input="onPopupEfficiencyInputsChange(row)"
+                        @keydown="handleExcelGridKeydown($event, rIdx, 7)" />
+                    </td>
+                    <td class="xl-cell">
+                      <input v-model.number="row.dailyTarget" type="number" inputmode="numeric" min="0" step="1"
+                        class="xl-input xl-num xl-w-target" @keydown="handleExcelGridKeydown($event, rIdx, 8)" />
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <label class="modal-checkbox">
+              <input v-model="popupDraft.recalcHourlyTargets" type="checkbox"
+                @change="popupDraft.lines.forEach((r) => onPopupEfficiencyInputsChange(r))" />
+              <span>Calculate hourly slot targets from Manpower × Mins × Target Eff ÷ SMV</span>
+            </label>
+
+            <div class="modal-summary-bar">
+              <span>
+                Unit: <strong>{{ popupDraft.unit }}</strong> · Rows Entered:
+                <strong>{{ popupTotals.totalLines }}</strong> · Avg Target Eff:
+                <strong>{{ popupTotals.avgTargetEff }}%</strong> · Manpower:
+                <strong>{{ popupTotals.operators }} Op / {{ popupTotals.helpers }} Hlp ({{
+                  popupTotals.manpower
+                }})</strong>
+              </span>
+              <span>
+                Total Target: <strong>{{ popupTotals.dailyTarget.toLocaleString() }} pcs</strong>
+              </span>
+            </div>
+
+            <div class="modal-footer">
+              <button type="button" class="btn btn-outline" @click="closeLinePopup">Cancel</button>
+              <button type="submit" class="btn btn-primary" :disabled="isSavingLineSetting">
+                {{ isSavingLineSetting ? 'Saving...' : `Save ${popupDraft.unit} Lines` }}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- Step-by-Step QR Entry Popup Modal -->
+    <Teleport to="body">
+      <div v-if="isQrModalOpen" class="modal-backdrop" role="dialog" aria-modal="true"
+        aria-labelledby="qr-entry-popup-title" @click.self="closeQrEntryPopup">
+        <div class="modal-card qr-modal-card">
+          <div class="modal-head">
+            <div>
+              <span id="qr-entry-popup-title" class="modal-badge qr-modal-badge">QR ENTRY</span>
+              <span class="xl-sheet-tab">
+                Slot {{ qrEntryOut.hourIndex + 1 }}: {{ BASE_HOURS[qrEntryOut.hourIndex]?.section ||
+                  shiftConfig.Shift_Start_time }}
+              </span>
+            </div>
+            <button type="button" class="modal-close-btn" aria-label="Close QR popup" @click="closeQrEntryPopup">
+              ✕
+            </button>
+          </div>
+
+          <div class="qr-step-block">
+            <div class="qr-step-header">
+              <span class="qr-step-title">Select QR Code Option</span>
+            </div>
+
+            <div class="qr-option-select-row">
+              <select :value="selectedQrOption" aria-label="QR Code Option" class="form-select qr-option-dropdown"
+                @change="onQrOptionDropdownChange($event.target.value)">
+                <option value="">-- Select QR Code Option --</option>
+                <option v-for="opt in QR_OPTIONS" :key="opt.key" :value="opt.key">
+                  {{ opt.label }} ({{ opt.badge }})
                 </option>
               </select>
-            </label>
-            <label class="field-group popup-unit-select-wrap">
-              <span class="popup-unit-label">Date:-</span>
-              <input v-model="popupDraft.date" type="date" class="form-input popup-unit-date" />
-            </label>
+            </div>
+          </div>
 
-            <div class="popup-unit-meta">
-              <span class="unit-badge unit-badge-sm">{{ popupDraft.unit }}</span>
-              <span class="muted-sm">
-                {{ popupUnitLineChoices.length }} Lines in {{ popupDraft.unit }} ·
-                Entered: <strong>{{ popupTotals.totalLines }}</strong> ·
-                Target Eff <strong>{{ popupTotals.avgTargetEff }}%</strong> ·
-                <strong>{{ popupTotals.manpower }}</strong> Manpower ·
-                <strong>{{ popupTotals.dailyTarget.toLocaleString() }}</strong> pcs
+          <div v-if="selectedQrOption && isOutputEntered" class="qr-step-block qr-entry-out-box">
+            <div class="qr-step-header">
+              <span class="step-pill step-pill-out">OUTPUT ENTRY</span>
+              <span class="qr-step-title">
+                <template v-if="scannedAtTime">
+                  · Scan Time: <strong>{{ scannedAtTime }}</strong>
+                </template>
+              </span>
+            </div>
+
+            <div class="qr-single-field-row">
+              <label v-if="selectedQrOption === 'FIRST_MC'" class="field-group qr-single-field">
+                <span>Output Entry</span>
+                <input v-model.number="qrEntryOut.qty" type="number" inputmode="numeric" step="1" min="1"
+                  placeholder="Enter 1st M/C pcs" class="form-input" required @input="handleOutputEntryChange" />
+              </label>
+
+              <label v-else-if="selectedQrOption === 'LAST_MC'" class="field-group qr-single-field">
+                <span>Output Entry (Last M/C pcs)</span>
+                <input v-model.number="qrEntryOut.qty" type="number" inputmode="numeric" step="1" min="1"
+                  placeholder="Enter Last M/C pcs" class="form-input" required @input="handleOutputEntryChange" />
+              </label>
+
+              <label v-else-if="selectedQrOption === 'QC_PASS'" class="field-group qr-single-field">
+                <span>Output Entry (QC Pass pcs)</span>
+                <input v-model.number="qrEntryOut.qcPass" type="number" inputmode="numeric" step="1" min="1"
+                  placeholder="Enter QC Pass pcs" class="form-input" required @input="handleOutputEntryChange" />
+              </label>
+
+              <button type="button" class="btn btn-primary btn-sm qr-action-btn" :disabled="!hasValidOutputEntry"
+                @click="openScanAfterOutput">
+                Scan QR →
+              </button>
+            </div>
+          </div>
+
+          <div v-if="selectedQrOption && isScanStepVisible" class="qr-step-block">
+            <div class="qr-step-header">
+              <span class="step-pill">STEP 3 · SCAN QR</span>
+              <span class="qr-step-title">
+                Scan QR for <strong>{{ activeOptionMeta?.label }}</strong>
+              </span>
+            </div>
+
+            <div class="qr-scan-row">
+              <input ref="qrScannerInputRef" v-model="qrScanInput" type="text" class="form-input"
+                :placeholder="`Scan ${activeOptionMeta?.label} QR (e.g. QR|L04|BUNDLE-210)`"
+                @keydown.enter.prevent="confirmQrScan()" />
+              <div class="qr-scan-btn-group">
+                <button type="button" class="btn btn-qr btn-sm"
+                  @click="isCameraActive ? stopQrCamera() : startQrCamera()">
+                  {{ isCameraActive ? 'Stop Camera' : 'Open Camera' }}
+                </button>
+                <button type="button" class="btn btn-primary btn-sm" :disabled="isProcessingQrScan"
+                  @click="confirmQrScan()">
+                  Insert Scan
+                </button>
+              </div>
+            </div>
+
+            <div v-if="cameraError" class="qr-feedback-bar">{{ cameraError }}</div>
+            <div v-show="isCameraActive" id="qr-camera-reader" class="qr-camera-box"></div>
+
+            <div class="qr-quick-samples">
+              <span class="preset-label">Quick Sample Scan:</span>
+              <button type="button" class="preset-chip" @click="confirmQrScan('QR|L04|BUNDLE-210')">
+                Scan L04
+              </button>
+              <button type="button" class="preset-chip" @click="confirmQrScan('QR|L02|BUNDLE-118')">
+                Scan L02
+              </button>
+            </div>
+
+            <div v-if="isQrScanned && scannedAtTime" class="modal-summary-bar">
+              <span>
+                QR: <strong>{{ scannedQrCode }}</strong> · Line:
+                <strong>{{ scannedLineLabel || qrTargetLine.lineName }}</strong> · Slot:
+                <strong>{{ BASE_HOURS[qrEntryOut.hourIndex]?.section }}</strong>
+              </span>
+              <span>
+                Scan Time: <strong>{{ scannedAtTime }}</strong>
               </span>
             </div>
           </div>
 
-          <div class="xl-formula-bar">
-            <span class="xl-name-box">fx</span>
-            <span class="xl-formula-text">
-              =SUM({{ popupDraft.unit }}) · Rows: <strong>{{ popupTotals.totalLines }}</strong> ·
-              Avg Eff: <strong>{{ popupTotals.avgTargetEff }}%</strong> ·
-              Manpower:
-              <strong>{{ popupTotals.operators }} Op + {{ popupTotals.helpers }} Hlp =
-                {{ popupTotals.manpower }}</strong>
-              · Target: <strong>{{ popupTotals.dailyTarget.toLocaleString() }} pcs</strong>
-            </span>
+          <div v-if="qrScanFeedback" class="qr-feedback-bar">
+            {{ qrScanFeedback }}
           </div>
 
-          <div class="excel-sheet-wrap">
-            <table ref="excelGridRef" class="excel-sheet-table" role="grid">
-              <thead>
-                <tr>
-                  <th class="xl-corner-th">#</th>
-                  <th>Line ({{ popupDraft.unit }})</th>
-                  <th>PO No</th>
-                  <th>Style</th>
-                  <th>Item</th>
-                  <th>SMV</th>
-                  <th>Op</th>
-                  <th>Hlp</th>
-                  <th>Target Eff %</th>
-                  <th>Target</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="(row, rIdx) in popupDraft.lines" :key="row.rowUid" class="xl-data-row">
-                  <td class="xl-row-num">{{ rIdx + 1 }}</td>
-                  <td class="xl-cell">
-                    <select :value="row.lineId" aria-label="Select Line under Unit" class="xl-select xl-w-line"
-                      @change="onGridLineDropdownChange(rIdx, $event.target.value)"
-                      @keydown="handleExcelGridKeydown($event, rIdx, 0)">
-                      <option value="">-- Select Line --</option>
-                      <option v-for="opt in popupUnitLineChoices" :key="opt.id" :value="opt.id">
-                        {{ opt.lineName }}
-                      </option>
-                    </select>
-                  </td>
-                  <td class="xl-cell">
-                    <input v-model="row.poNo" type="text" class="xl-input xl-w-po" placeholder="PO-44102"
-                      @keydown="handleExcelGridKeydown($event, rIdx, 1)" />
-                  </td>
-                  <td class="xl-cell">
-                    <input v-model="row.styleNo" type="text" class="xl-input xl-w-style" placeholder="STY-7710-WVN"
-                      @keydown="handleExcelGridKeydown($event, rIdx, 2)" />
-                  </td>
-                  <td class="xl-cell">
-                    <select v-model="row.itemName" aria-label="Item Name" class="xl-select xl-w-item"
-                      @keydown="handleExcelGridKeydown($event, rIdx, 3)">
-                      <option v-for="item in getRowItemChoices(row)" :key="item" :value="item">
-                        {{ item }}
-                      </option>
-                    </select>
-                  </td>
-                  <td class="xl-cell">
-                    <input v-model.number="row.smv" type="number" inputmode="decimal" min="0.1" step="0.1"
-                      class="xl-input xl-num xl-w-smv" @keydown="handleExcelGridKeydown($event, rIdx, 4)" />
-                  </td>
-                  <td class="xl-cell">
-                    <input v-model.number="row.operators" type="number" inputmode="numeric" min="0"
-                      class="xl-input xl-num xl-w-op" @keydown="handleExcelGridKeydown($event, rIdx, 5)" />
-                  </td>
-                  <td class="xl-cell">
-                    <input v-model.number="row.helpers" type="number" inputmode="numeric" min="0"
-                      class="xl-input xl-num xl-w-hlp" @keydown="handleExcelGridKeydown($event, rIdx, 6)" />
-                  </td>
-                  <td class="xl-cell">
-                    <input v-model.number="row.targetEfficiency" type="number" inputmode="decimal" min="1" max="100"
-                      step="0.5" class="xl-input xl-num xl-w-eff" @keydown="handleExcelGridKeydown($event, rIdx, 7)" />
-                  </td>
-                  <td class="xl-cell">
-                    <input v-model.number="row.dailyTarget" type="number" inputmode="numeric" min="0" step="50"
-                      class="xl-input xl-num xl-w-target" @keydown="handleExcelGridKeydown($event, rIdx, 8)" />
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
-          <label class="modal-checkbox">
-            <input v-model="popupDraft.recalcHourlyTargets" type="checkbox" />
-            <span>Re-distribute hourly targets across shift slots from Daily Target</span>
-          </label>
-
-          <div class="modal-summary-bar">
-            <span>
-              Unit: <strong>{{ popupDraft.unit }}</strong> · Rows Entered:
-              <strong>{{ popupTotals.totalLines }}</strong> · Avg Target Eff:
-              <strong>{{ popupTotals.avgTargetEff }}%</strong> · Manpower:
-              <strong>{{ popupTotals.operators }} Op / {{ popupTotals.helpers }} Hlp ({{
-                popupTotals.manpower
-              }})</strong>
-            </span>
-            <span>
-              Total Target: <strong>{{ popupTotals.dailyTarget.toLocaleString() }} pcs</strong>
-            </span>
-          </div>
-
-          <div class="modal-footer">
-            <button type="button" class="btn btn-outline" @click="closeLinePopup">Cancel</button>
-            <button type="submit" class="btn btn-primary">
-              Save {{ popupDraft.unit }} Lines
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-
-    <!-- Step-by-Step QR Entry Popup Modal -->
-    <div v-if="isQrModalOpen" class="modal-backdrop" role="dialog" aria-modal="true"
-      aria-labelledby="qr-entry-popup-title" @click.self="closeQrEntryPopup">
-      <div class="modal-card qr-modal-card">
-        <div class="modal-head">
-          <div>
-            <span class="modal-badge qr-modal-badge">QR ENTRY</span>
-            <span class="xl-sheet-tab">
-              Slot {{ qrEntryOut.hourIndex + 1 }}: {{ BASE_HOURS[qrEntryOut.hourIndex]?.section ||
-                shiftConfig.Shift_Start_time }}
-            </span>
-          </div>
-          <button type="button" class="modal-close-btn" aria-label="Close QR popup" @click="closeQrEntryPopup">
-            ✕
-          </button>
-        </div>
-
-        <div class="qr-step-block">
-          <div class="qr-step-header">
-            <span class="qr-step-title">Select QR Code Option</span>
-          </div>
-
-          <div class="qr-option-select-row">
-            <select :value="selectedQrOption" aria-label="QR Code Option" class="form-select qr-option-dropdown"
-              @change="onQrOptionDropdownChange($event.target.value)">
-              <option value="">-- Select QR Code Option --</option>
-              <option v-for="opt in QR_OPTIONS" :key="opt.key" :value="opt.key">
-                {{ opt.label }} ({{ opt.badge }})
-              </option>
-            </select>
-          </div>
-        </div>
-
-        <div v-if="selectedQrOption && isOutputEntered" class="qr-step-block qr-entry-out-box">
-          <div class="qr-step-header">
-            <span class="step-pill step-pill-out">OUTPUT ENTRY</span>
-            <span class="qr-step-title">
-              <template v-if="scannedAtTime">
-                · Scan Time: <strong>{{ scannedAtTime }}</strong>
-              </template>
-            </span>
-          </div>
-
-          <div class="qr-single-field-row">
-            <label v-if="selectedQrOption === 'FIRST_MC'" class="field-group qr-single-field">
-              <span>Output Entry</span>
-              <input v-model.number="qrEntryOut.qty" type="number" inputmode="numeric" pattern="[0-9]*" min="1"
-                placeholder="Enter 1st M/C pcs" class="form-input" required @input="handleOutputEntryChange" />
-            </label>
-
-            <label v-else-if="selectedQrOption === 'LAST_MC'" class="field-group qr-single-field">
-              <span>Output Entry (Last M/C pcs)</span>
-              <input v-model.number="qrEntryOut.qty" type="number" inputmode="numeric" pattern="[0-9]*" min="1"
-                placeholder="Enter Last M/C pcs" class="form-input" required @input="handleOutputEntryChange" />
-            </label>
-
-            <label v-else-if="selectedQrOption === 'QC_PASS'" class="field-group qr-single-field">
-              <span>Output Entry (QC Pass pcs)</span>
-              <input v-model.number="qrEntryOut.qcPass" type="number" inputmode="numeric" pattern="[0-9]*" min="1"
-                placeholder="Enter QC Pass pcs" class="form-input" required @input="handleOutputEntryChange" />
-            </label>
-
-            <button type="button" class="btn btn-primary btn-sm qr-action-btn" :disabled="!hasValidOutputEntry"
-              @click="openScanAfterOutput">
-              Scan QR →
-            </button>
-          </div>
-        </div>
-
-        <div v-if="selectedQrOption && isScanStepVisible" class="qr-step-block">
-          <div class="qr-step-header">
-            <span class="step-pill">STEP 3 · SCAN QR</span>
-            <span class="qr-step-title">
-              Scan QR for <strong>{{ activeOptionMeta?.label }}</strong>
-            </span>
-          </div>
-
-          <div class="qr-scan-row">
-            <input ref="qrScannerInputRef" v-model="qrScanInput" type="text" class="form-input"
-              :placeholder="`Scan ${activeOptionMeta?.label} QR (e.g. QR|L04|BUNDLE-210)`"
-              @keydown.enter.prevent="confirmQrScan()" />
-            <div class="qr-scan-btn-group">
-              <button type="button" class="btn btn-qr btn-sm"
-                @click="isCameraActive ? stopQrCamera() : startQrCamera()">
-                {{ isCameraActive ? 'Stop Camera' : 'Open Camera' }}
-              </button>
-              <button type="button" class="btn btn-primary btn-sm" @click="confirmQrScan()">
-                Insert Scan
-              </button>
+          <div v-if="qrScanHistory.length" class="qr-modal-history">
+            <span class="preset-label">Recent Logs:</span>
+            <div class="qr-history-pills">
+              <span v-for="item in qrScanHistory.slice(0, 3)" :key="item.id" class="history-pill">
+                {{ item.optionLabel }} · {{ item.lineName }} ({{ item.slotLabel }}) {{ item.summary }} · {{ item.time }}
+              </span>
             </div>
           </div>
-
-          <div v-if="cameraError" class="qr-feedback-bar">{{ cameraError }}</div>
-          <div v-show="isCameraActive" id="qr-camera-reader" class="qr-camera-box"></div>
-
-          <div class="qr-quick-samples">
-            <span class="preset-label">Quick Sample Scan:</span>
-            <button type="button" class="preset-chip" @click="confirmQrScan('QR|L04|BUNDLE-210')">
-              Scan L04
-            </button>
-            <button type="button" class="preset-chip" @click="confirmQrScan('QR|L02|BUNDLE-118')">
-              Scan L02
-            </button>
-          </div>
-
-          <div v-if="isQrScanned && scannedAtTime" class="modal-summary-bar">
-            <span>
-              QR: <strong>{{ scannedQrCode }}</strong> · Line:
-              <strong>{{ scannedLineLabel || qrTargetLine.lineName }}</strong> · Slot:
-              <strong>{{ BASE_HOURS[qrEntryOut.hourIndex]?.section }}</strong>
-            </span>
-            <span>
-              Scan Time: <strong>{{ scannedAtTime }}</strong>
-            </span>
-          </div>
-        </div>
-
-        <div v-if="qrScanFeedback" class="qr-feedback-bar">
-          {{ qrScanFeedback }}
-        </div>
-
-        <div v-if="qrScanHistory.length" class="qr-modal-history">
-          <span class="preset-label">Recent Logs:</span>
-          <div class="qr-history-pills">
-            <span v-for="item in qrScanHistory.slice(0, 3)" :key="item.id" class="history-pill">
-              {{ item.optionLabel }} · {{ item.lineName }} ({{ item.slotLabel }}) {{ item.summary }} · {{ item.time }}
-            </span>
-          </div>
         </div>
       </div>
-    </div>
+    </Teleport>
 
     <!-- KPI Grid -->
     <section class="kpi-row">
@@ -3778,9 +4192,9 @@ onUnmounted(() => {
                 <button v-if="linesData.length > 0" type="button" class="act-btn act-inspect" style="margin-left: 8px"
                   @click="
                     searchQuery = '';
-                  onlyGapAlerts = false;
-                  onlyActiveLines = false;
-                  selectedUnit = 'ALL';
+                    onlyGapAlerts = false;
+                    onlyActiveLines = false;
+                    selectedUnit = 'ALL';
                   ">
                   Clear Filters
                 </button>
@@ -3901,17 +4315,20 @@ onUnmounted(() => {
               <td class="num-col">{{ row.target }}</td>
               <td>
                 <input v-model.number="currentLine.hourlyRows[row.index].actual" type="number" inputmode="numeric"
-                  pattern="[0-9]*" min="0" class="counter-input"
+                  step="1" min="0" class="counter-input"
+                  @input="clampHourlyInput(currentLine, row.index, 'actual')"
                   @change="onHourlyActualChange(currentLine, row.index)" />
               </td>
               <td>
                 <input v-model.number="currentLine.hourlyRows[row.index].qcPass" type="number" inputmode="numeric"
-                  pattern="[0-9]*" min="0" :max="row.actual" class="counter-input counter-input-qc"
+                  step="1" min="0" :max="row.actual" class="counter-input counter-input-qc"
+                  @input="clampHourlyInput(currentLine, row.index, 'qcPass')"
                   @change="onHourlyQcPassChange(currentLine, row.index)" />
               </td>
               <td>
                 <input v-model.number="currentLine.hourlyRows[row.index].downtimeMin" type="number" inputmode="numeric"
-                  pattern="[0-9]*" min="0" class="counter-input counter-input-npt"
+                  step="1" min="0" class="counter-input counter-input-npt"
+                  @input="clampHourlyInput(currentLine, row.index, 'downtimeMin')"
                   @change="onHourlyDowntimeChange(currentLine, row.index)" />
               </td>
               <td>
@@ -4003,7 +4420,7 @@ onUnmounted(() => {
   flex: 1 1 320px;
 }
 
-.board-shell.mode-compact .top-selector-group>* {
+.board-shell.mode-compact .top-selector-group > * {
   flex: 1 1 auto;
 }
 
@@ -4535,7 +4952,6 @@ onUnmounted(() => {
 }
 
 @media (max-width: 640px) {
-
   .form-input,
   .form-select {
     min-height: 42px;
@@ -4703,8 +5119,8 @@ onUnmounted(() => {
   width: 100%;
 }
 
-.board-shell.mode-compact .header-actions>.btn,
-.board-shell.mode-compact .filter-controls>.filter-toggle {
+.board-shell.mode-compact .header-actions > .btn,
+.board-shell.mode-compact .filter-controls > .filter-toggle {
   flex: 1 1 calc(50% - 4px);
   min-height: 40px;
   text-align: center;
@@ -4877,7 +5293,7 @@ onUnmounted(() => {
   }
 }
 
-.board-shell.mode-compact.data-orientation-portrait .kpi-row {
+.board-shell.mode-compact[data-orientation='portrait'] .kpi-row {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
@@ -5206,19 +5622,23 @@ onUnmounted(() => {
 }
 
 .unit-subtotal-row {
-  background: linear-gradient(90deg,
-      rgba(37, 99, 235, 0.18) 0%,
-      rgba(30, 41, 59, 0.92) 45%,
-      rgba(23, 34, 56, 0.95) 100%);
+  background: linear-gradient(
+    90deg,
+    rgba(37, 99, 235, 0.18) 0%,
+    rgba(30, 41, 59, 0.92) 45%,
+    rgba(23, 34, 56, 0.95) 100%
+  );
   border-top: 1px solid rgba(96, 165, 250, 0.32);
   border-bottom: 2px solid rgba(148, 163, 184, 0.24);
 }
 
 .unit-subtotal-row:hover {
-  background: linear-gradient(90deg,
-      rgba(37, 99, 235, 0.24) 0%,
-      rgba(30, 41, 59, 0.96) 45%,
-      rgba(23, 34, 56, 0.98) 100%);
+  background: linear-gradient(
+    90deg,
+    rgba(37, 99, 235, 0.24) 0%,
+    rgba(30, 41, 59, 0.96) 45%,
+    rgba(23, 34, 56, 0.98) 100%
+  );
 }
 
 .subtotal-label {
